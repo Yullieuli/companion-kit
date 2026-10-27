@@ -66,6 +66,8 @@ https://github.com/Yullieuli/companion-kit
 - **`pip install git+…` 是在拉源码吗**：以前是。现在默认走 Release 的 whl，不解压源码、不需要 git。
 - **会污染系统吗**：不会。只有 `~/.companion`（store + venv）和一条 PATH。
 - **怎么卸载**：删 `~/.companion`，再把 PATH 里那一条去掉即可。
+- **pip 报 502 / 代理错误**：Windows 上 pip 会读 `HTTP(S)_PROXY`，代理挂了就误报"包坏了"。
+  安装脚本检测到会**自动去掉代理重试**，还失败才报错。
 
 ## 现在能跑什么
 
