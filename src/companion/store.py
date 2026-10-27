@@ -103,7 +103,7 @@ class Home:
     def init(self) -> list[str]:
         """建目录与缺的模板。返回这次真正创建的文件（相对路径）。"""
         created: list[str] = []
-        for d in ("memory/pages", "people", "life", "logs", "mood", "voice", "shots"):
+        for d in ("memory/pages", "people", "life", "logs", "mood", "voice", "shots", "stickers", "group"):
             (self.root / d).mkdir(parents=True, exist_ok=True)
         for rel, body in _REQUIRED.items():
             p = self.root / rel

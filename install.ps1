@@ -41,8 +41,8 @@ $NoEnv  = [bool]($Opt["NoEnv"] -or ($env:COMPANION_NO_ENV -eq "1"))
 $DryRun = [bool]$Opt["DryRun"]
 
 $Repo   = "https://github.com/Yullieuli/companion-kit"
-$Ver    = "v0.1.0"
-$Wheel  = "$Repo/releases/download/$Ver/companion_kit-0.1.0-py3-none-any.whl"
+$Ver    = "v0.1.2"
+$Wheel  = "$Repo/releases/download/$Ver/companion_kit-0.1.2-py3-none-any.whl"
 $Root   = Join-Path $env:LOCALAPPDATA "companion"
 $Bin    = Join-Path $Root "bin"
 $Venv   = Join-Path $Store "venv"

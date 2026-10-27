@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from . import context as context_mod
-from . import cost, device, drive, events, life, memory, people, voice
+from . import cost, device, drive, events, group, life, memory, people, sticker, voice
 from .store import Home
 
 PROTOCOL = "2024-11-05"
@@ -64,6 +64,19 @@ TOOLS: list[Tool] = [
             {"ids": {"type": "array", "items": {"type": "string"}}, "all": {"type": "boolean",
              "description": "true = 把最近两天没讲过的全标掉", "default": False}},
             ["ids"]),
+    _schema("companion_group_judge", "群聊里该不该接话。三档：reply 直接接 / lurk 看到了但不说 / ignore 假装没看见。",
+            {"text": {"type": "string"}, "from_owner": {"type": "boolean", "default": False},
+             "addressed_to_me": {"type": "boolean", "description": "是否 @ 了她或叫了名字"}},
+            ["text"]),
+    _schema("companion_group_note", "记下这次接没接话（决定冷却与潜水计数）。接了必须 note。",
+            {"mode": {"type": "string", "enum": ["reply", "lurk"]}}, ["mode"]),
+    _schema("companion_sticker_pick", "按情绪挑一张表情。没有合适的不凑合，返回空。",
+            {"mood": {"type": "string", "enum": sticker.MOODS},
+             "tags": {"type": "array", "items": {"type": "string"}}}),
+    _schema("companion_sticker_add", "把一张图收进表情库。",
+            {"path": {"type": "string"}, "mood": {"type": "string", "enum": sticker.MOODS},
+             "tags": {"type": "array", "items": {"type": "string"}}}, ["path"]),
+    _schema("companion_sticker_stats", "表情库统计（总数 / 各情绪张数）。"),
     _schema("companion_person", "读或写人物卡。给了 fact 就是学一件关于他的事。",
             {"who": {"type": "string", "description": "owner 或名字"},
              "fact": {"type": "string"}, "relation": {"type": "string"},
@@ -170,6 +183,35 @@ def _t_life_shared(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "marked": n, "unshared_left": len(life.unshared(home))}
 
 
+def _t_group_judge(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    out = group.judge(home, a["text"], addressed_to_me=a.get("addressed_to_me"),
+                      from_owner=bool(a.get("from_owner")))
+    return {"ok": True, **out}
+
+
+def _t_group_note(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    if a["mode"] == "reply":
+        group.note_reply(home)
+    else:
+        group.note_lurk(home)
+    return {"ok": True, **group.status(home)}
+
+
+def _t_sticker_pick(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    hit = sticker.pick(home, a.get("mood") or "", a.get("tags") or [])
+    if not hit:
+        return {"ok": False, "error": "库里没有对得上的，这条就纯文字吧"}
+    return {"ok": True, **hit}
+
+
+def _t_sticker_add(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    return {"ok": True, **sticker.add(home, a["path"], mood=a.get("mood") or "开心", tags=a.get("tags") or [])}
+
+
+def _t_sticker_stats(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    return {"ok": True, **sticker.stats(home)}
+
+
 def _t_person(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     who = a.get("who") or people.OWNER
     if a.get("fact"):
@@ -216,6 +258,11 @@ HANDLERS: dict[str, Callable[[Home, dict[str, Any]], dict[str, Any]]] = {
     "companion_memory_search": _t_memory_search,
     "companion_life_record": _t_life,
     "companion_life_mark_shared": _t_life_shared,
+    "companion_group_judge": _t_group_judge,
+    "companion_group_note": _t_group_note,
+    "companion_sticker_pick": _t_sticker_pick,
+    "companion_sticker_add": _t_sticker_add,
+    "companion_sticker_stats": _t_sticker_stats,
     "companion_person": _t_person,
     "companion_cost": _t_cost,
     "companion_voice": _t_voice,

@@ -100,10 +100,13 @@ companion person learn --who owner --fact "讨厌开放式结局"
 companion voice say "今天想跟你说句话"    # 本地 TTS，落盘不发送
 companion device look --target desktop   # 截图 + 前台窗口
 companion device act --target phone --act tap --x 540 --y 1200
-companion mcp --list                    # 列出 15 个 MCP 工具
+companion group judge "这游戏真好玩"      # 群聊三档：reply / lurk / ignore
+companion sticker add ./图.png --mood 无语 --tags 翻白眼
+companion sticker pick --mood 无语        # 没合适的就返回空，不凑合
+companion mcp --list                    # 列出 20 个 MCP 工具
 ```
 
-**76 → 116 个单测**，全部离线可跑。
+**133 个单测**，全部离线可跑。
 
 | 层 | 做了什么 |
 |---|---|
@@ -112,10 +115,11 @@ companion mcp --list                    # 列出 15 个 MCP 工具
 | **人物卡**（M3） | 关系/亲近/信任三维 + 事实追加（不覆盖，旧事实留着看变化） |
 | **手**（M4.5） | 手机(adb) / 桌面(GDI+SendInput) / 浏览器(CDP) / 游戏(窗口)，**五道闸先于能力** |
 | **语音**（M5.5） | edge-tts → SAPI → say → espeak 依次回退；唱歌先做 TTS 降级版 |
+| **群聊**（M4） | 三档 reply/lurk/ignore：被点名必回、冷却潜水、一小时上限、连续潜水转无视 |
+| **表情**（M4） | 按情绪目录 + 标签挑，最近发过的降权，没有对得上的**就不发** |
 | **MCP**（M6） | 15 个工具，stdio JSON-RPC；codex / openclaw / 任何 MCP 客户端可直接挂 |
 
-**还没做的**：群聊三档判断与表情包（M4）、B 站接入（M5）、hermes adapter、
-真 SVC 唱歌（要她自己的音色模型）。
+**还没做的**：B 站接入（M5）、hermes adapter、真 SVC 唱歌（要她自己的音色模型）。
 
 ## 接成 MCP（codex / openclaw / 任意客户端）
 
@@ -135,7 +139,8 @@ companion mcp --list                    # 列出 15 个 MCP 工具
 | 类 | 工具 |
 |---|---|
 | 想（不花钱） | `companion_context` `companion_status` `companion_tick` `companion_events` `companion_cost` |
-| 记 | `companion_memory_write` `companion_memory_search` `companion_life_record` `companion_person` |
+| 记 | `companion_memory_write` `companion_memory_search` `companion_life_record` `companion_life_mark_shared` `companion_person` |
+| 聊 | `companion_group_judge` `companion_group_note` `companion_sticker_pick` `companion_sticker_add` `companion_sticker_stats` |
 | 做 | `companion_say` `companion_voice` `device_look` `device_act` `device_open` |
 
 调用顺序约定：每轮开头 `companion_context` → 干活 → `companion_life_record` 记一笔。

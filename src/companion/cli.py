@@ -29,7 +29,7 @@ import sys
 from datetime import datetime
 
 from . import context as context_mod
-from . import cost, drive, events, life, memory, people
+from . import cost, drive, events, group, life, memory, people, sticker
 from .store import Home
 
 
@@ -191,6 +191,43 @@ def cmd_person(home: Home, args) -> int:
 
 
 # ── 手 ─────────────────────────────────────────────────────
+def cmd_group(home: Home, args) -> int:
+    if args.action == "note":
+        if args.mode == "reply":
+            group.note_reply(home)
+        else:
+            group.note_lurk(home)
+        _dump(group.status(home), True) if args.json else print(json.dumps(group.status(home), ensure_ascii=False, indent=2))
+        return 0
+    if args.action == "status":
+        st = group.status(home)
+        _dump(st if args.json else json.dumps(st, ensure_ascii=False, indent=2), args.json)
+        return 0
+    out = group.judge(home, args.text, from_owner=args.from_owner, addressed_to_me=None if args.addressed is None else args.addressed)
+    _dump(out if args.json else f"{out['mode']}（{out['reason']}）", args.json)
+    return 0
+
+
+def cmd_sticker(home: Home, args) -> int:
+    if args.action == "add":
+        out = sticker.add(home, args.path, mood=args.mood, tags=args.tags or [])
+        _dump(out if args.json else f"收进表情库：{out['name']}（{out['mood']}）", args.json)
+    elif args.action == "pick":
+        hit = sticker.pick(home, args.mood, args.tags or [])
+        if not hit:
+            _dump({"ok": False, "error": "没有对得上的"} if args.json else "没有对得上的", args.json)
+            return 1
+        _dump(hit if args.json else f"{hit['name']}（{hit['mood']}）→ {hit['path']}", args.json)
+    elif args.action == "send":
+        ok = sticker.mark_sent(home, args.name)
+        _dump({"ok": ok} if args.json else ("记下了" if ok else "没有这个表情"), args.json)
+        return 0 if ok else 1
+    else:
+        st = sticker.stats(home)
+        _dump(st if args.json else json.dumps(st, ensure_ascii=False, indent=2), args.json)
+    return 0
+
+
 def cmd_device(home: Home, args) -> int:
     from . import device
 
@@ -282,6 +319,20 @@ def build_parser() -> argparse.ArgumentParser:
     pe.add_argument("who", nargs="?", default=people.OWNER)
     pe.add_argument("--fact", default="")
 
+    g = sub.add_parser("group", help="群聊该不该接话")
+    g.add_argument("action", choices=["judge", "note", "status"], nargs="?", default="judge")
+    g.add_argument("text", nargs="?", default="")
+    g.add_argument("--from-owner", action="store_true")
+    g.add_argument("--addressed", dest="addressed", action="store_true", default=None)
+    g.add_argument("--mode", choices=["reply", "lurk"], default="reply")
+
+    sk = sub.add_parser("sticker", help="表情库")
+    sk.add_argument("action", choices=["stats", "add", "pick", "send"], nargs="?", default="stats")
+    sk.add_argument("path", nargs="?", default="")
+    sk.add_argument("--mood", default="", choices=[""] + sticker.MOODS)
+    sk.add_argument("--tags", nargs="*")
+    sk.add_argument("--name", default="")
+
     d = sub.add_parser("device", help="手：看屏幕 / 动作 / 打开")
     d.add_argument("action", choices=["look", "act", "open", "log"])
     d.add_argument("--target", default="desktop", choices=["phone", "desktop", "browser", "game"])
@@ -323,6 +374,8 @@ def main(argv: list[str] | None = None) -> int:
         "life": cmd_life,
         "person": cmd_person,
         "device": cmd_device,
+        "group": cmd_group,
+        "sticker": cmd_sticker,
         "voice": cmd_voice,
         "mcp": cmd_mcp,
     }

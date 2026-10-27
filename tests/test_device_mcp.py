@@ -130,9 +130,10 @@ class McpTest(unittest.TestCase):
         r = mcp.handle(self.home, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         names = {t["name"] for t in r["result"]["tools"]}
         for want in ("companion_context", "companion_tick", "device_look", "companion_memory_write",
-                     "companion_life_mark_shared"):
+                     "companion_life_mark_shared", "companion_group_judge", "companion_sticker_pick"):
             self.assertIn(want, names)
-        self.assertEqual(len(names), 15)
+        self.assertEqual(len(names), len(mcp.TOOLS))
+        self.assertGreaterEqual(len(names), 20)
 
     def test_call_memory_write_then_search(self):
         r = mcp.handle(self.home, {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
