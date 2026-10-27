@@ -26,6 +26,14 @@ const TICK_MS = Number(process.env.COMPANION_TICK_MS) || 5 * 60 * 1000
 // 用 COMPANION_DSH_SESSION 指定；投递失败时会打日志提示。
 const SESSION = process.env.COMPANION_DSH_SESSION || 'companion'
 
+function logDelivery(homeDir, row) {
+  try {
+    const dir = path.join(homeDir, 'logs')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.appendFileSync(path.join(dir, 'delivery.jsonl'), JSON.stringify(row) + '\n')
+  } catch {}
+}
+
 function home() {
   return process.env.COMPANION_HOME || path.join(os.homedir(), '.companion')
 }
@@ -128,6 +136,25 @@ async function resolveSession(controller) {
   }
 }
 
+/** 调 sessionController.prompt，兼容两种签名；返回 {ok, shape, error}。 */
+async function promptSession(controller, sessionId, text) {
+  const payload = [{ type: 'text', text }]
+  const attempts = [
+    ['object', () => controller.prompt({ sessionId, mode: 'queue', content: payload })],
+    ['args', () => controller.prompt(sessionId, payload)],
+  ]
+  let lastErr = ''
+  for (const [shape, fn] of attempts) {
+    try {
+      await fn()
+      return { ok: true, shape, error: '' }
+    } catch (e) {
+      lastErr = String(e && e.message)
+    }
+  }
+  return { ok: false, shape: '', error: lastErr }
+}
+
 export default {
   name: 'dsh-companion',
   inject: ['sessionController'],
@@ -171,17 +198,13 @@ export default {
           log('没有可投递的会话（list() 空）→ 跳过；可用 COMPANION_DSH_SESSION 指定')
           return
         }
-        try {
-          await controller.prompt({
-            sessionId: target,
-            mode: 'queue',
-            content: [{ type: 'text', text }],
-          })
-          log(`投递 wake_due：${e.action} → session ${target}`)
-        } catch (err) {
-          log(`投递失败（sessionId=${target}）：` + String(err && err.message) +
-            ' —— 用 COMPANION_DSH_SESSION 指定真实会话 id')
-        }
+        const r = await promptSession(controller, target, text)
+        logDelivery(home(), {
+          at: new Date().toISOString(), action: e.action, session: target,
+          ok: r.ok, shape: r.shape, error: r.error,
+        })
+        if (r.ok) log(`投递 wake_due：${e.action} → session ${target}（${r.shape}）`)
+        else log(`投递失败（sessionId=${target}）：${r.error}`)
       } finally {
         busy = false
       }
@@ -204,7 +227,7 @@ export default {
         path: p,
         handler: async (req, res) => {
           try {
-            const body = await fn()
+            const body = await fn(req)
             res.setHeader('content-type', 'application/json; charset=utf-8')
             res.end(JSON.stringify(body))
           } catch (e) {
@@ -217,6 +240,19 @@ export default {
         const r = await runJson(['context', '--budget', '1600'])
         return r.ok ? r.data : r
       })
+      reg('/dsh-companion/ping', async (req) => {
+        const c = typeof ctx.get === 'function' ? ctx.get('sessionController') : null
+        if (!c || typeof c.prompt !== 'function') return { ok: false, error: '没有 sessionController.prompt' }
+        const q = String((req && req.url) || '')
+        const m = /[?&]session=([^&]+)/.exec(q)
+        const target = m ? decodeURIComponent(m[1]) : await resolveSession(c)
+        if (!target) return { ok: false, error: '解析不到会话 id' }
+        const text = '【通道测试】这是 companion-kit 的一次投递测试，看到就说明通了。'
+        const r = await promptSession(c, target, text)
+        logDelivery(home(), { at: new Date().toISOString(), action: 'ping', session: target,
+          ok: r.ok, shape: r.shape, error: r.error })
+        return { session: target, ...r }
+      }),
       reg('/dsh-companion/sessions', async () => {
         const c = typeof ctx.get === 'function' ? ctx.get('sessionController') : null
         if (!c || typeof c.list !== 'function') return { error: 'sessionController.list 不可用' }
@@ -230,7 +266,8 @@ export default {
             count: flat.length,
             sample: flat.slice(0, 3).map((x) => {
               const out = {}
-              for (const k of ['id', 'sessionId', 'key', 'title', 'name', 'updatedAt', 'createdAt']) {
+              for (const k of ['id', 'sessionId', 'key', 'title', 'name', 'workspace', 'cwd',
+                               'agent', 'agentId', 'updatedAt', 'createdAt']) {
                 if (x[k] !== undefined) out[k] = typeof x[k] === 'string' ? x[k].slice(0, 80) : x[k]
               }
               return out

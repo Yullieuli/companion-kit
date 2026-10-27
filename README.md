@@ -54,7 +54,15 @@ curl -fsSL https://raw.githubusercontent.com/Yullieuli/companion-kit/main/instal
 调试用两个环境变量：
 
 - `COMPANION_TICK_MS=1200` 把 tick 从 5 分钟缩到 1.2 秒（别长期开着）
-- `COMPANION_DSH_SESSION=<会话id>` 指定 `wake_due` 投递到哪个 DSH 会话（默认 `companion`，通常需要改）
+- `COMPANION_DSH_SESSION=<会话id>` 指定 `wake_due` 投递到哪个 DSH 会话；不设则自动取 `sessionController.list()` 里最近更新的那个
+
+DSH 装好后有三个只读/自检路由：
+
+| 路由 | 作用 |
+|---|---|
+| `/dsh-companion/status` | 心情、额度、上次决策（只读，不扣额度） |
+| `/dsh-companion/sessions` | 解析到的目标会话 + 前三个会话摘要 |
+| `/dsh-companion/ping` | 立刻投递一条测试消息，返回 `{session, ok, shape, error}`；可用 `?session=<id>` 指定目标 |
 
 **DSH 桌面端**：设置 → 添加插件 → 填
 
