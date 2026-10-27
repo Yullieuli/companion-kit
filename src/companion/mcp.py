@@ -1,0 +1,279 @@
+"""mcp：把 core 暴露成 MCP 服务，给 codex / openclaw / 任何支持 MCP 的宿主用。
+
+为什么是 MCP 而不是各家 SDK：这是唯一一个"写一次、所有宿主都能挂"的接口。
+DSH 有自己的 cordis、hermes 有自己的 hook，但两边都能当 MCP 客户端。
+
+协议：JSON-RPC 2.0，stdio，**按行分隔**（不是 Content-Length 分帧）。
+规矩：stdout 只输出协议消息，任何调试信息写 stderr —— 否则客户端会解析失败。
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from datetime import datetime
+from typing import Any, Callable
+
+from . import context as context_mod
+from . import cost, device, drive, events, life, memory, people, voice
+from .store import Home
+
+PROTOCOL = "2024-11-05"
+SERVER = {"name": "companion-kit", "version": "0.1.0"}
+
+Tool = dict[str, Any]
+
+
+def _schema(name: str, desc: str, props: dict[str, Any] | None = None, required: list[str] | None = None) -> Tool:
+    return {
+        "name": name,
+        "description": desc,
+        "inputSchema": {
+            "type": "object",
+            "properties": props or {},
+            "required": required or [],
+        },
+    }
+
+
+TOOLS: list[Tool] = [
+    _schema("companion_context", "拿到这一轮该注入的上下文（人格/状态/记忆/人物卡/生活）。宿主每轮开头调一次。",
+            {"budget": {"type": "integer", "description": "字符预算，默认 2000", "default": 2000}}),
+    _schema("companion_status", "只看状态：心情、额度、是否在作息窗口、上次决策。不推进决策、不扣额度。"),
+    _schema("companion_tick", "问一次「现在想干什么」。零 token：纯本地计算。返回 action/why/cost。",
+            {"emit_silent": {"type": "boolean", "description": "沉默也写一条事件（调试用）", "default": False}}),
+    _schema("companion_events", "读事件流。宿主用它决定要不要起一轮会话。",
+            {"since": {"type": "integer", "description": "游标（上次返回的 cursor）"},
+             "wait": {"type": "number", "description": "长轮询秒数，0 表示立刻返回", "default": 0}}),
+    _schema("companion_say", "记下她想说的一句话：扣额度、写日志，返回文本。真正发送由宿主的通道完成。",
+            {"text": {"type": "string"}, "channel": {"type": "string", "description": "宿主自己的通道名"}},
+            ["text"]),
+    _schema("companion_memory_write", "写一页记忆（一个主题一页）。summary 必填：它是索引里唯一被读到的字。",
+            {"title": {"type": "string"}, "body": {"type": "string"},
+             "tags": {"type": "array", "items": {"type": "string"}},
+             "summary": {"type": "string", "description": "一句话，会进索引"}},
+            ["title", "body", "summary"]),
+    _schema("companion_memory_search", "按关键词找记忆页（标签/摘要/正文）。",
+            {"query": {"type": "string"}, "limit": {"type": "integer", "default": 5}}, ["query"]),
+    _schema("companion_life_record", "记一件她生活里发生的事（看了什么/玩了什么/想了什么）。会进上下文，带相对时间。",
+            {"title": {"type": "string"}, "kind": {"type": "string", "enum": list(life.KIND_VERB)},
+             "detail": {"type": "string"}, "tags": {"type": "array", "items": {"type": "string"}},
+             "shared": {"type": "boolean", "description": "是否已经跟他讲过了", "default": False}},
+            ["title"]),
+    _schema("companion_person", "读或写人物卡。给了 fact 就是学一件关于他的事。",
+            {"who": {"type": "string", "description": "owner 或名字"},
+             "fact": {"type": "string"}, "relation": {"type": "string"},
+             "closeness": {"type": "integer"}, "notes": {"type": "string"}}),
+    _schema("companion_cost", "今天花了多少 / 预算还剩多少。"),
+    _schema("companion_voice", "合成一段语音（本地 TTS），返回文件路径。sing=true 是降级版「唱」。",
+            {"text": {"type": "string"}, "sing": {"type": "boolean", "default": False}}, ["text"]),
+    _schema("device_look", "看屏幕：截图并返回路径与前台窗口。target 选 phone/desktop/browser/game。",
+            {"target": {"type": "string", "enum": ["phone", "desktop", "browser", "game"], "default": "desktop"}}),
+    _schema("device_act", "在屏幕上做一个动作（点/滑/打字），返回执行后的截图。危险动作会被拒。",
+            {"target": {"type": "string", "enum": ["phone", "desktop", "browser", "game"]},
+             "action": {"type": "string", "enum": ["tap", "click", "swipe", "type", "key"]},
+             "x": {"type": "integer"}, "y": {"type": "integer"},
+             "x2": {"type": "integer"}, "y2": {"type": "integer"},
+             "text": {"type": "string"}, "key": {"type": "string"}, "double": {"type": "boolean"}},
+            ["target", "action"]),
+    _schema("device_open", "打开一个 App / 网址 / 程序（走白名单）。",
+            {"target": {"type": "string", "enum": ["phone", "desktop", "browser", "game"]},
+             "what": {"type": "string"}}, ["target", "what"]),
+]
+
+
+# ── 工具实现 ────────────────────────────────────────────────
+def _t_context(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    ctx = context_mod.build(
+        home,
+        budget=int(a.get("budget") or 2000),
+        memory_text=memory.render(home),
+        person_text=people.render(home, people.OWNER),
+        life_text=life.render(home),
+    )
+    return ctx.as_dict()
+
+
+def _t_status(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    rows = home.read_jsonl("logs/initiatives.jsonl", limit=3)
+    from . import clock
+
+    return {
+        "mood": home.mood().get("label"),
+        "quota": home.quota(),
+        "in_window": clock.in_window(home.rhythm()),
+        "in_sleep": clock.in_sleep(home.rhythm()),
+        "cost_today": round(cost.today_total(home), 4),
+        "last_decision": rows[-1] if rows else None,
+        "memory_pages": len(memory.pages(home)),
+        "life_recent": len(life.recent(home, days=2)),
+    }
+
+
+def _t_tick(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    return drive.tick(home, now=datetime.now(), emit_silent=bool(a.get("emit_silent")))
+
+
+def _t_events(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    wait = float(a.get("wait") or 0)
+    since = a.get("since")
+    if wait > 0:
+        rows, cur = events.wait(home, timeout=wait, since=since)
+    else:
+        rows, cur = events.poll(home, since=since)
+    return {"events": rows, "cursor": cur}
+
+
+def _t_say(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    text = (a.get("text") or "").strip()
+    if not text:
+        return {"ok": False, "error": "没有内容"}
+    now = datetime.now()
+    from . import quota as quota_mod
+
+    st = quota_mod.record(home.quota(), now, "speak")
+    home.save_json("quota.json", st)
+    home.append_jsonl("logs/said.jsonl", {
+        "at": now.isoformat(timespec="seconds"), "text": text,
+        "channel": a.get("channel") or "", "source": "mcp",
+    })
+    return {"ok": True, "text": text, "quota": st}
+
+
+def _t_memory_write(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    p = memory.write(home, a["title"], a.get("body", ""), tags=a.get("tags") or [], summary=a["summary"])
+    return {"ok": True, **p.as_dict()}
+
+
+def _t_memory_search(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    hits = memory.search(home, a["query"], limit=int(a.get("limit") or 5))
+    return {"ok": True, "hits": [{**p.as_dict(), "score": round(s, 2)} for s, p in hits]}
+
+
+def _t_life(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    row = life.record(home, a["title"], kind=a.get("kind") or "watch", detail=a.get("detail", ""),
+                      tags=a.get("tags") or [], shared=bool(a.get("shared")))
+    return {"ok": True, **row}
+
+
+def _t_person(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    who = a.get("who") or people.OWNER
+    if a.get("fact"):
+        p = people.learn(home, who, a["fact"])
+    elif any(k in a for k in ("relation", "closeness", "notes")):
+        p = people.upsert(home, who, relation=a.get("relation"), closeness=a.get("closeness"), notes=a.get("notes"))
+    else:
+        p = people.resolve(home, who)
+    if not p:
+        return {"ok": False, "error": f"没有这个人的卡：{who}"}
+    return {"ok": True, "person": p.as_dict(), "card": people.render(home, who)}
+
+
+def _t_cost(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    return {"ok": True, "today_cny": round(cost.today_total(home), 4), "summary": cost.summary(home)}
+
+
+def _t_voice(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    text = a.get("text") or ""
+    r = voice.sing(home, text) if a.get("sing") else voice.speak(home, text)
+    return r
+
+
+def _t_look(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    return device.look(home, a.get("target") or "desktop")
+
+
+def _t_act(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    args = {k: a[k] for k in ("x", "y", "x2", "y2", "text", "key", "double") if k in a}
+    return device.act(home, a["target"], a["action"], args, is_owner=bool(a.get("is_owner", True)))
+
+
+def _t_open(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    return device.open_thing(home, a["target"], a["what"], is_owner=bool(a.get("is_owner", True)))
+
+
+HANDLERS: dict[str, Callable[[Home, dict[str, Any]], dict[str, Any]]] = {
+    "companion_context": _t_context,
+    "companion_status": _t_status,
+    "companion_tick": _t_tick,
+    "companion_events": _t_events,
+    "companion_say": _t_say,
+    "companion_memory_write": _t_memory_write,
+    "companion_memory_search": _t_memory_search,
+    "companion_life_record": _t_life,
+    "companion_person": _t_person,
+    "companion_cost": _t_cost,
+    "companion_voice": _t_voice,
+    "device_look": _t_look,
+    "device_act": _t_act,
+    "device_open": _t_open,
+}
+
+
+# ── JSON-RPC ───────────────────────────────────────────────
+def _err(id_: Any, code: int, message: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": id_, "error": {"code": code, "message": message}}
+
+
+def _ok(id_: Any, result: Any) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": id_, "result": result}
+
+
+def handle(home: Home, req: dict[str, Any]) -> dict[str, Any] | None:
+    """处理一条请求。通知（没有 id）返回 None，不回包。"""
+    method = req.get("method") or ""
+    id_ = req.get("id")
+    params = req.get("params") or {}
+
+    if id_ is None:
+        return None  # notifications/initialized 之类
+
+    if method == "initialize":
+        return _ok(id_, {
+            "protocolVersion": PROTOCOL,
+            "capabilities": {"tools": {"listChanged": False}},
+            "serverInfo": SERVER,
+            "instructions": "伴侣运行时。每轮开头调 companion_context；想让她主动说话时轮询 companion_events。",
+        })
+    if method == "ping":
+        return _ok(id_, {})
+    if method == "tools/list":
+        return _ok(id_, {"tools": TOOLS})
+    if method == "tools/call":
+        name = params.get("name") or ""
+        args = params.get("arguments") or {}
+        fn = HANDLERS.get(name)
+        if not fn:
+            return _err(id_, -32601, f"没有这个工具：{name}")
+        try:
+            out = fn(home, args)
+        except Exception as e:
+            out = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return _ok(id_, {
+            "content": [{"type": "text", "text": json.dumps(out, ensure_ascii=False)}],
+            "isError": not out.get("ok", True),
+        })
+    if method in ("resources/list", "prompts/list"):
+        return _ok(id_, {"resources": []} if method.startswith("resources") else {"prompts": []})
+    return _err(id_, -32601, f"不支持的方法：{method}")
+
+
+def serve(home: Home, *, stdin=None, stdout=None) -> int:
+    stdin = stdin or sys.stdin
+    stdout = stdout or sys.stdout
+    home.init()
+    for line in stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except Exception:
+            stdout.write(json.dumps(_err(None, -32700, "JSON 解析失败"), ensure_ascii=False) + "\n")
+            stdout.flush()
+            continue
+        resp = handle(home, req)
+        if resp is not None:
+            stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")
+            stdout.flush()
+    return 0

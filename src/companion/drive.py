@@ -33,8 +33,10 @@ def _owner_last_seen(home: Home) -> float | None:
 
 
 def _pending_life(home: Home) -> int:
-    rows = home.read_jsonl("life/pending.jsonl", limit=50)
-    return sum(1 for r in rows if not r.get("reacted"))
+    """没跟他讲过的生活事件条数。这是"想说话"最主要的燃料。"""
+    from . import life as life_mod
+
+    return len(life_mod.unshared(home))
 
 
 def tick(

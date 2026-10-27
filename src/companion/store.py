@@ -80,6 +80,11 @@ _REQUIRED = {
     "logs/turns.jsonl": "",
     "logs/cost.jsonl": "",
     "logs/initiatives.jsonl": "",
+    "logs/events.jsonl": "",
+    "logs/said.jsonl": "",
+    "logs/voice.jsonl": "",
+    "logs/device.jsonl": "",
+    "life/life.jsonl": "",
 }
 
 

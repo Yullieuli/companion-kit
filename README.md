@@ -82,18 +82,77 @@ https://github.com/Yullieuli/companion-kit
 - **pip 报 502 / 代理错误**：Windows 上 pip 会读 `HTTP(S)_PROXY`，代理挂了就误报"包坏了"。
   安装脚本检测到会**自动去掉代理重试**，还失败才报错。
 
-## 现在能跑什么
+## 现在能做什么
 
 ```bash
-companion init                      # 建 store（幂等）
-companion context --budget 1200     # 本轮该注入什么（人格/心情/时间/额度）
-companion tick                      # 问一次"现在该干什么"（零 token）
-companion events --wait 30          # 等一次 wake_due
-companion cost                      # 今天花了多少
+companion init                          # 建 store（幂等，绝不覆盖 SOUL.md）
+companion context --budget 1200         # 本轮该注入什么（人格/状态/记忆/人物卡/生活）
+companion status                        # 只读：心情、额度、作息、记忆页数
+companion tick                          # 问一次"现在想干什么"（零 token）
+companion events --wait 30              # 等一次 wake_due
+companion cost                          # 今天花了多少
+
+companion memory write --title 影之刃零 --body "..." --summary "一句话" --tags 游戏 设计
+companion memory search 游戏            # 标签 > 摘要 > 正文，越近越靠前
+companion memory index                  # 从各页 summary 重新投影索引
+companion life add "看完影之刃零" --kind watch --detail "10 分"
+companion person learn --who owner --fact "讨厌开放式结局"
+companion voice say "今天想跟你说句话"    # 本地 TTS，落盘不发送
+companion device look --target desktop   # 截图 + 前台窗口
+companion device act --target phone --act tap --x 540 --y 1200
+companion mcp --list                    # 列出 15 个 MCP 工具
 ```
 
-M0/M1/M1.5/M2 的 core 已完成（76 个单测）：文件协议、时钟、心情、额度、上下文、
-成本闸、自主决策、事件队列。还没做的是三个 adapter（hermes / dsh 的投递 / MCP）。
+**76 → 116 个单测**，全部离线可跑。
+
+| 层 | 做了什么 |
+|---|---|
+| **记忆**（M3） | 一页一主题，summary 必填；索引是从页投影的（不手写）；孤岛/退休只报告不删 |
+| **生活**（M3） | `life.jsonl` 带相对时间（"2 小时前"），`shared` 标记决定要不要跟他讲 |
+| **人物卡**（M3） | 关系/亲近/信任三维 + 事实追加（不覆盖，旧事实留着看变化） |
+| **手**（M4.5） | 手机(adb) / 桌面(GDI+SendInput) / 浏览器(CDP) / 游戏(窗口)，**五道闸先于能力** |
+| **语音**（M5.5） | edge-tts → SAPI → say → espeak 依次回退；唱歌先做 TTS 降级版 |
+| **MCP**（M6） | 15 个工具，stdio JSON-RPC；codex / openclaw / 任何 MCP 客户端可直接挂 |
+
+**还没做的**：群聊三档判断与表情包（M4）、B 站接入（M5）、hermes adapter、
+真 SVC 唱歌（要她自己的音色模型）。
+
+## 接成 MCP（codex / openclaw / 任意客户端）
+
+```json
+{
+  "mcpServers": {
+    "companion": {
+      "command": "companion",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+工具面分三类：
+
+| 类 | 工具 |
+|---|---|
+| 想（不花钱） | `companion_context` `companion_status` `companion_tick` `companion_events` `companion_cost` |
+| 记 | `companion_memory_write` `companion_memory_search` `companion_life_record` `companion_person` |
+| 做 | `companion_say` `companion_voice` `device_look` `device_act` `device_open` |
+
+调用顺序约定：每轮开头 `companion_context` → 干活 → `companion_life_record` 记一笔。
+主动说话是宿主轮询 `companion_events`，拿到 `wake_due` 才起一轮会话 —— 所以"她没话说"这件事是零成本的。
+
+## 手的安全闸（不可关闭）
+
+`devices.json` 里五条，全部在代码里判，不靠提示词：
+
+1. 白名单：只控列出的包名 / 窗口 / 域名；
+2. 危险动作：关机、卸载、转账、支付、删除、改密码、装 APK —— **直接拒，不二次询问**
+   （二次询问会被话术绕过，"不询问"本身就是防线）；
+3. 主人限定：群聊 @ 她、陌生人私聊，一律不触发；
+4. 留痕：每个动作写 `logs/device.jsonl`，可回放；
+5. 幂等 + 超时：同一动作 3 秒内不重复，单动作 10 秒中止。
+
+边界：**只做屏幕与输入**。不注入进程、不读内存、不碰反作弊。
 
 ## 三条设计约束
 

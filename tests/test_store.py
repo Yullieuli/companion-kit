@@ -23,10 +23,11 @@ class StoreTest(unittest.TestCase):
         created = self.home.init()
         self.assertIn("SOUL.md", created)
         self.assertIn("mood/state.json", created)
-        self.assertEqual(len(created), 10)
+        self.assertEqual(len(created), 15)
         for rel in ("SOUL.md", "MEMORY.md", "memory/index.md", "rhythm.json",
                     "mood/state.json", "opinions.jsonl", "quota.json", "logs/turns.jsonl",
-                    "logs/cost.jsonl", "logs/initiatives.jsonl"):
+                    "logs/cost.jsonl", "logs/initiatives.jsonl", "logs/events.jsonl",
+                    "logs/said.jsonl", "logs/voice.jsonl", "logs/device.jsonl", "life/life.jsonl"):
             self.assertTrue((self.home.root / rel).exists(), rel)
 
     def test_init_is_idempotent_and_never_overwrites(self):
