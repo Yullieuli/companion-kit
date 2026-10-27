@@ -136,23 +136,33 @@ async function resolveSession(controller) {
   }
 }
 
-/** 调 sessionController.prompt，兼容两种签名；返回 {ok, shape, error}。 */
+/** 调 sessionController.prompt。
+ *
+ * 真实签名（从 DSH 的 app.asar 里挖出来的，别猜）：
+ *   prompt(request: SessionPromptRequest, signal: AbortSignal)
+ *   SessionPromptRequest { requestId, sessionId, mode: 'queue'|'steer', content: PromptContentPart[] }
+ * 第一行就是 signal.throwIfAborted()，所以 signal 必须是真的 AbortSignal。
+ */
+let _reqSeq = 0
+function newRequestId() {
+  _reqSeq += 1
+  return `companion-${Date.now()}-${_reqSeq}`
+}
+
 async function promptSession(controller, sessionId, text) {
-  const payload = [{ type: 'text', text }]
-  const attempts = [
-    ['object', () => controller.prompt({ sessionId, mode: 'queue', content: payload })],
-    ['args', () => controller.prompt(sessionId, payload)],
-  ]
-  let lastErr = ''
-  for (const [shape, fn] of attempts) {
-    try {
-      await fn()
-      return { ok: true, shape, error: '' }
-    } catch (e) {
-      lastErr = String(e && e.message)
-    }
+  const ac = new AbortController()
+  const request = {
+    requestId: newRequestId(),
+    sessionId,
+    mode: 'queue',
+    content: [{ type: 'text', text }],
   }
-  return { ok: false, shape: '', error: lastErr }
+  try {
+    await controller.prompt(request, ac.signal)
+    return { ok: true, shape: 'request+signal', error: '' }
+  } catch (e) {
+    return { ok: false, shape: '', error: String((e && e.message) || e) }
+  }
 }
 
 export default {
