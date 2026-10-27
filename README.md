@@ -22,6 +22,36 @@ core：时钟 / 心情 / 人物卡 / 记忆 / 主动决策 / 配额（纯逻辑�
 
 **core 不 import 任何宿主 SDK，不直接发网络请求。** 这样它才能在三种宿主里跑同一份逻辑，也才能被单测。
 
+## 一行安装
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Yullieuli/companion-kit/main/install.sh | bash
+```
+
+它建一个独立 venv（不碰系统 Python）、从 GitHub 装包、初始化 store、把 `companion` 放进 PATH。
+
+| 宿主 | 接法 |
+|---|---|
+| **DSH** | 桌面端「添加插件」里填 `https://github.com/Yullieuli/companion-kit`<br>或命令：`dsh plugin --profile desktop add github:Yullieuli/companion-kit` |
+| **Hermes** | 适配器仍在开发；现在可先用 CLI：`companion context / tick / events` |
+| **Codex / OpenClaw** | `companion mcp`（M6 提供） |
+
+DSH 那边是一层薄壳：`package.json` 指向 `dsh/index.js`，插件每 5 分钟问一次 core「该不该醒」，
+有 `wake_due` 才用 `sessionController.prompt` 叫她。**壳里没有逻辑**——换宿主不用重写行为。
+
+## 现在能跑什么
+
+```bash
+companion init                      # 建 store（幂等）
+companion context --budget 1200     # 本轮该注入什么（人格/心情/时间/额度）
+companion tick                      # 问一次"现在该干什么"（零 token）
+companion events --wait 30          # 等一次 wake_due
+companion cost                      # 今天花了多少
+```
+
+M0/M1/M1.5/M2 的 core 已完成（76 个单测）：文件协议、时钟、心情、额度、上下文、
+成本闸、自主决策、事件队列。还没做的是三个 adapter（hermes / dsh 的投递 / MCP）。
+
 ## 三条设计约束
 
 1. **花钱是架构问题**：前缀分层 + 块级去重 + 事件门零成本 + 本地先做 + 分级模型 + 日预算闸。

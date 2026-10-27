@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+import sys
+import tempfile
+import unittest
+from datetime import datetime, timedelta
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from companion import drive, events, quota  # noqa: E402
+from companion.store import Home  # noqa: E402
+
+T0 = datetime(2026, 10, 27, 21, 0)
+
+
+class EventsTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_emit_and_poll(self):
+        events.emit(self.home, "wake_due", T0, action="speak", reason="想他")
+        fresh, cur = events.poll(self.home, since=0)
+        self.assertEqual(len(fresh), 1)
+        self.assertEqual(fresh[0]["action"], "speak")
+        self.assertEqual(cur, 1)
+
+    def test_cursor_prevents_redelivery(self):
+        events.emit(self.home, "idle", T0)
+        _, cur = events.poll(self.home)
+        fresh, _ = events.poll(self.home, since=cur)
+        self.assertEqual(fresh, [])
+
+    def test_cursor_survives_restart(self):
+        events.emit(self.home, "idle", T0)
+        events.poll(self.home)
+        again = Home.at(self.tmp.name)
+        self.assertEqual(events.cursor(again), 1)
+
+    def test_wait_returns_on_timeout(self):
+        rows, cur = events.wait(self.home, timeout=0.2, interval=0.05)
+        self.assertEqual(rows, [])
+        self.assertEqual(cur, 0)
+
+
+class TickTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+        self.home.save_json("rhythm.json", {
+            "windows": [{"start": "20:00", "end": "24:00", "wakes": 2}],
+            "sleep": {"at": "00:30", "wake": "09:00"},
+            "skip_chance": 0.0,
+        })
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_sleep_emits_nothing(self):
+        r = drive.tick(self.home, now=datetime(2026, 10, 28, 2, 0))
+        self.assertEqual(r["action"], "silent")
+        self.assertEqual(r["blocked"], "sleep")
+        self.assertEqual(events.read_all(self.home), [])
+
+    def test_speaking_tick_emits_wake_due_and_records_quota(self):
+        r = drive.tick(self.home, now=T0, pending_share=2)
+        self.assertIn(r["action"], ("speak", "voice", "share"))
+        kinds = [e["kind"] for e in events.read_all(self.home)]
+        self.assertIn("wake_due", kinds)
+        self.assertEqual(self.home.quota()["count"], 1)
+
+    def test_second_tick_within_gap_is_blocked(self):
+        drive.tick(self.home, now=T0, pending_share=2)
+        r = drive.tick(self.home, now=T0 + timedelta(minutes=5), pending_share=2)
+        self.assertEqual(r["action"], "diary")
+        self.assertEqual(self.home.quota()["count"], 1)
+
+    def test_budget_exhausted_blocks_speaking(self):
+        self.home.save_json("quota.json", quota.default_state("2026-10-27"))
+        r = drive.tick(self.home, now=T0, budget={"daily_cny": 0.0}, emit_silent=True)
+        self.assertEqual(r["action"], "silent")
+        self.assertEqual(r["blocked"], "budget")
+        kinds = [e["kind"] for e in events.read_all(self.home)]
+        self.assertIn("spend_guard", kinds)
+
+    def test_initiative_is_logged(self):
+        drive.tick(self.home, now=T0, pending_share=1)
+        rows = self.home.read_jsonl("logs/initiatives.jsonl")
+        self.assertEqual(len(rows), 1)
+        self.assertIn("action", rows[0])
+        self.assertIn("spent_today", rows[0])
+
+    def test_mood_is_persisted(self):
+        self.home.save_json("mood/state.json", {
+            "axes": {"satisfaction": 30, "closeness": 0, "energy": 0},
+            "label": "开心",
+            "last_change": (T0 - timedelta(hours=24)).isoformat(),
+            "history": [],
+        })
+        drive.tick(self.home, now=T0)
+        axes = self.home.mood()["axes"]["satisfaction"]
+        self.assertLess(axes, 30)  # 衰减被写回去了
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
