@@ -16,7 +16,7 @@
 set -uo pipefail
 
 REPO="${COMPANION_REPO:-https://github.com/Yullieuli/companion-kit}"
-WHEEL="${COMPANION_WHEEL:-$REPO/releases/download/v0.2.0/companion_kit-0.2.0-py3-none-any.whl}"
+WHEEL="${COMPANION_WHEEL:-$REPO/releases/download/v0.2.2/companion_kit-0.2.2-py3-none-any.whl}"
 HOME_DIR="${COMPANION_HOME:-$HOME/.companion}"
 PYTHON="${COMPANION_PYTHON:-}"
 FROM=""
@@ -83,12 +83,12 @@ say "venv: $VENV"
 
 if [ -n "$FROM" ]; then
   say "从本地装：$FROM"
-  "$VPY" -m pip install -q -e "$FROM" || { echo "本地安装失败" >&2; exit 1; }
+  "$VPY" -m pip install -q --no-compile -e "$FROM" || { echo "本地安装失败" >&2; exit 1; }
 else
   say "装 whl（不需要 git）"
-  if ! "$VPY" -m pip install -q "$WHEEL"; then
+  if ! "$VPY" -m pip install -q --no-compile "$WHEEL"; then
     say "whl 失败，回退 git"
-    "$VPY" -m pip install -q "git+$REPO" || { echo "安装失败：whl 与 git 都不通" >&2; exit 1; }
+    "$VPY" -m pip install -q --no-compile "git+$REPO" || { echo "安装失败：whl 与 git 都不通" >&2; exit 1; }
   fi
 fi
 

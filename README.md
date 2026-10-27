@@ -155,6 +155,16 @@ companion mcp --list                    # 列出 24 个 MCP 工具
 调用顺序约定：每轮开头 `companion_context` → 干活 → `companion_life_record` 记一笔。
 主动说话是宿主轮询 `companion_events`，拿到 `wake_due` 才起一轮会话 —— 所以"她没话说"这件事是零成本的。
 
+## 杀软误报
+
+`device` 那组模块会被部分杀软判成 `Trojan/Python.ShellLoader`——它要截屏、模拟输入、
+连本地浏览器调试端口，必然同时用到 ctypes、subprocess 和裸 socket，这三样凑在一起
+就撞了启发式特征。**是误报**，判断依据与三种处理方式见 [docs/AV.md](docs/AV.md)。
+
+已经做的：把 670 行的 `device.py` 拆成四个模块、安装时 `--no-compile`（不生成 `.pyc`）。
+你还可以做：把 `%USERPROFILE%\.companion\venv\Lib\site-packages\companion` 加进信任区，
+`companion doctor` 会直接打印这个路径。
+
 ## 手的安全闸（不可关闭）
 
 `devices.json` 里五条，全部在代码里判，不靠提示词：

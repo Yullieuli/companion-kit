@@ -351,6 +351,74 @@ def cmd_voice(home: Home, args) -> int:
     return 0 if out.get("ok") else 1
 
 
+def cmd_doctor(home: Home, args) -> int:
+    """体检：版本、路径、模块能不能导入、外部工具在不在、以及给杀软的白名单建议。"""
+    import importlib
+    import platform
+    import shutil as sh
+
+    from . import __version__
+
+    mods = [
+        ("device", "手（闸 + 分发）"), ("devwin", "桌面截图/输入（ctypes）"),
+        ("devcdp", "浏览器 CDP（socket）"), ("imgpng", "PNG 编码"),
+        ("voice", "语音"), ("mcp", "MCP 服务"),
+    ]
+    checks: list[dict[str, Any]] = []
+    for name, desc in mods:
+        try:
+            importlib.import_module(f"companion.{name}")
+            checks.append({"item": name, "desc": desc, "ok": True, "detail": ""})
+        except Exception as e:
+            checks.append({"item": name, "desc": desc, "ok": False, "detail": f"{type(e).__name__}: {e}"})
+
+    tools = {
+        "adb": sh.which("adb") or sh.which("adb.exe") or "",
+        "ffmpeg": sh.which("ffmpeg") or "",
+        "edge-tts": sh.which("edge-tts") or "",
+    }
+    pyc = list((Path(__file__).parent / "__pycache__").glob("*.pyc")) if (Path(__file__).parent / "__pycache__").exists() else []
+
+    payload = {
+        "ok": all(c["ok"] for c in checks),
+        "version": __version__,
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "home": str(home.root),
+        "package_dir": str(Path(__file__).parent),
+        "modules": checks,
+        "external": tools,
+        "pyc_count": len(pyc),
+        "av_hint": {
+            "why": "device 相关模块会调用 ctypes / 裸 socket / subprocess，杀软容易按「加载器」特征误报",
+            "what_was_flagged": "companion/device.pyc 曾被判为 Trojan/Python.ShellLoader（误报）",
+            "fix": [
+                f"把这个目录加进杀软信任区：{Path(__file__).parent}",
+                "重装时加 --no-compile，不生成 .pyc：pip install --no-compile <whl>",
+                "或临时设 PYTHONDONTWRITEBYTECODE=1 再运行",
+            ],
+        },
+    }
+    if args.json:
+        _dump(payload, True)
+        return 0 if payload["ok"] else 1
+
+    print(f"companion {payload['version']} ｜ Python {payload['python']}")
+    print(f"store   {payload['home']}")
+    print(f"包目录  {payload['package_dir']}")
+    print()
+    for c in checks:
+        print(f"  {'✓' if c['ok'] else '✗'} {c['item']:10} {c['desc']}" + ("" if c["ok"] else f"  → {c['detail']}"))
+    print()
+    for k, v in tools.items():
+        print(f"  {'✓' if v else '·'} {k:10} {v or '（没装，相关功能会自己降级）'}")
+    print()
+    print(f"  __pycache__ 里 {payload['pyc_count']} 个 .pyc")
+    if payload["pyc_count"]:
+        print("  如果杀软反复报毒，把上面那个包目录加进信任区，并用 --no-compile 重装。")
+    return 0 if payload["ok"] else 1
+
+
 def cmd_mcp(home: Home, args) -> int:
     from . import mcp
 
@@ -481,6 +549,8 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--public", action="store_true", help="模拟公开发布（会被拒）")
     v.add_argument("--limit", type=int, default=5)
 
+    sub.add_parser("doctor", help="体检：模块/外部工具/杀软误报位置")
+
     mc = sub.add_parser("mcp", help="MCP 服务（stdio）")
     mc.add_argument("--list", action="store_true", help="只列工具，不进服务循环")
     return p
@@ -509,6 +579,7 @@ def main(argv: list[str] | None = None) -> int:
         "sticker": cmd_sticker,
         "voice": cmd_voice,
         "mcp": cmd_mcp,
+        "doctor": cmd_doctor,
     }
     try:
         return table[args.cmd](home, args)

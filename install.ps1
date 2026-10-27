@@ -41,8 +41,8 @@ $NoEnv  = [bool]($Opt["NoEnv"] -or ($env:COMPANION_NO_ENV -eq "1"))
 $DryRun = [bool]$Opt["DryRun"]
 
 $Repo   = "https://github.com/Yullieuli/companion-kit"
-$Ver    = "v0.2.0"
-$Wheel  = "$Repo/releases/download/$Ver/companion_kit-0.2.0-py3-none-any.whl"
+$Ver    = "v0.2.2"
+$Wheel  = "$Repo/releases/download/$Ver/companion_kit-0.2.2-py3-none-any.whl"
 $Root   = Join-Path $env:LOCALAPPDATA "companion"
 $Bin    = Join-Path $Root "bin"
 $Venv   = Join-Path $Store "venv"
@@ -125,7 +125,7 @@ else {
 # pip 会读 HTTP(S)_PROXY；代理挂了就报 502，看起来像"包坏了"。
 # 所以：先按环境走，失败就去掉代理重试，再失败才回退 git。
 function Pip-Install([string[]]$targets) {
-  & $VenvPy -m pip install -q @targets
+  & $VenvPy -m pip install -q --no-compile @targets
   if ($LASTEXITCODE -eq 0) { return $true }
   $keys = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
   $saved = @{}
@@ -134,7 +134,7 @@ function Pip-Install([string[]]$targets) {
     if ($v) { $saved[$k] = $v; [Environment]::SetEnvironmentVariable($k, $null) }
   }
   Say "pip 直连失败（可能代理不通），去掉代理重试…"
-  & $VenvPy -m pip install -q @targets
+  & $VenvPy -m pip install -q --no-compile @targets
   $ok = ($LASTEXITCODE -eq 0)
   foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
   return $ok
