@@ -11,6 +11,7 @@
 //   COMPANION_PYTHON   跑 core 的 python（默认 python3；建议指向装了本包的 venv）
 
 import { spawn } from 'node:child_process'
+import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -26,7 +27,16 @@ function home() {
 }
 
 function pyBin() {
-  return process.env.COMPANION_PYTHON || 'python3'
+  // 优先级：显式指定 > 一行安装建的 venv > PATH 里的 python3/python。
+  // Windows 上 `python` 常常是应用商店的占位符，所以 venv 要排在前面。
+  if (process.env.COMPANION_PYTHON) return process.env.COMPANION_PYTHON
+  const venv = process.platform === 'win32'
+    ? path.join(home(), 'venv', 'Scripts', 'python.exe')
+    : path.join(home(), 'venv', 'bin', 'python')
+  try {
+    if (fs.existsSync(venv)) return venv
+  } catch {}
+  return process.platform === 'win32' ? 'python' : 'python3'
 }
 
 /** 调一次 CLI，拿 JSON。失败不抛，返回 null —— 插件不能把宿主拖死。 */

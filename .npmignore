@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+tests/
+docs/
+*.sh
+*.ps1
+_patch_*.py
