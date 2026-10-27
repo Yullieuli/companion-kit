@@ -60,6 +60,10 @@ TOOLS: list[Tool] = [
              "detail": {"type": "string"}, "tags": {"type": "array", "items": {"type": "string"}},
              "shared": {"type": "boolean", "description": "是否已经跟他讲过了", "default": False}},
             ["title"]),
+    _schema("companion_life_mark_shared", "把生活事件标成「已经跟他讲过了」。讲完必须调，否则她会重复讲同一件事。",
+            {"ids": {"type": "array", "items": {"type": "string"}}, "all": {"type": "boolean",
+             "description": "true = 把最近两天没讲过的全标掉", "default": False}},
+            ["ids"]),
     _schema("companion_person", "读或写人物卡。给了 fact 就是学一件关于他的事。",
             {"who": {"type": "string", "description": "owner 或名字"},
              "fact": {"type": "string"}, "relation": {"type": "string"},
@@ -156,6 +160,16 @@ def _t_life(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, **row}
 
 
+def _t_life_shared(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    ids = [str(x) for x in (a.get("ids") or [])]
+    if a.get("all"):
+        ids = [r["id"] for r in life.unshared(home) if r.get("id")]
+    if not ids:
+        return {"ok": False, "error": "没给 ids，也没标 all"}
+    n = life.mark_shared(home, ids)
+    return {"ok": True, "marked": n, "unshared_left": len(life.unshared(home))}
+
+
 def _t_person(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     who = a.get("who") or people.OWNER
     if a.get("fact"):
@@ -201,6 +215,7 @@ HANDLERS: dict[str, Callable[[Home, dict[str, Any]], dict[str, Any]]] = {
     "companion_memory_write": _t_memory_write,
     "companion_memory_search": _t_memory_search,
     "companion_life_record": _t_life,
+    "companion_life_mark_shared": _t_life_shared,
     "companion_person": _t_person,
     "companion_cost": _t_cost,
     "companion_voice": _t_voice,
