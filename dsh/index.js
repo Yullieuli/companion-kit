@@ -178,9 +178,27 @@ export default {
         const r = await runJson(['context', '--budget', '1600'])
         return r.ok ? r.data : r
       })
+      reg('/dsh-companion/diag', async () => ({
+        session: SESSION,
+        tickMs: TICK_MS,
+        hasWebServer: !!webServer,
+        controller: (() => {
+          const c = typeof ctx.get === 'function' ? ctx.get('sessionController') : null
+          if (!c) return null
+          const keys = new Set()
+          let o = c
+          while (o && o !== Object.prototype) {
+            Object.getOwnPropertyNames(o).forEach((k) => keys.add(k))
+            o = Object.getPrototypeOf(o)
+          }
+          return { keys: [...keys].slice(0, 60), prompt: typeof c.prompt }
+        })(),
+        node: process.version,
+      })),
       reg('/dsh-companion/status', async () => {
-        const [c, k] = await Promise.all([runJson(['cost']), runJson(['tick'])])
-        return { cost: c.ok ? c.data : c, tick: k.ok ? k.data : k, home: home() }
+        // 只读：不能在这里调 tick，否则"看一眼"就扣一次开口额度
+        const [st, c] = await Promise.all([runJson(['status']), runJson(['cost'])])
+        return { status: st.ok ? st.data : st, cost: c.ok ? c.data : c, home: home() }
       })
     }
 

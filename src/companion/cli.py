@@ -64,6 +64,36 @@ def cmd_tick(home: Home, args) -> int:
     return 0
 
 
+def cmd_status(home: Home, args) -> int:
+    """只读：看当前状态，不推进任何决策（不扣额度、不写事件）。"""
+    from . import quota as quota_mod
+
+    rows = home.read_jsonl("logs/initiatives.jsonl", limit=5)
+    payload = {
+        "home": str(home.root),
+        "mood": home.mood().get("label"),
+        "quota": home.quota(),
+        "in_window": None,
+        "last_decision": rows[-1] if rows else None,
+        "cost_today": cost.today_total(home),
+    }
+    try:
+        from . import clock as clock_mod
+        payload["in_window"] = clock_mod.in_window(home.rhythm())
+        payload["in_sleep"] = clock_mod.in_sleep(home.rhythm())
+    except Exception:
+        pass
+    if args.json:
+        _dump(payload, True)
+    else:
+        print(f"心情：{payload['mood']}｜今天 ¥{payload['cost_today']:.3f}")
+        print(f"额度：{quota_mod.summary(home.quota(), None)}")
+        if payload["last_decision"]:
+            d = payload["last_decision"]
+            print(f"上次决策：{d.get('action')}（{d.get('why')}）@ {d.get('at')}")
+    return 0
+
+
 def cmd_events(home: Home, args) -> int:
     if args.wait > 0:
         rows, cur = events.wait(home, timeout=args.wait, since=args.since)
@@ -106,6 +136,8 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--since", type=int, default=None)
     e.add_argument("--wait", type=float, default=0)
 
+    sub.add_parser("status", help="只读状态（不推进决策）")
+
     sub.add_parser("cost", help="今日花费")
 
     s = sub.add_parser("say", help="预览要发的消息")
@@ -123,6 +155,7 @@ def main(argv: list[str] | None = None) -> int:
         "tick": cmd_tick,
         "events": cmd_events,
         "cost": cmd_cost,
+        "status": cmd_status,
         "say": cmd_say,
     }
     try:
