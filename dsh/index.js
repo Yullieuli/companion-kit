@@ -34,6 +34,25 @@ function logDelivery(homeDir, row) {
   } catch {}
 }
 
+function sessionFile() {
+  return path.join(home(), 'dsh.json')
+}
+
+/** 读/写"钉住的会话"。比环境变量好：改完不用重启 DSH。 */
+function pinnedSession() {
+  try {
+    const d = JSON.parse(fs.readFileSync(sessionFile(), 'utf8'))
+    return d && typeof d.session === 'string' ? d.session : ''
+  } catch { return '' }
+}
+
+function pinSession(id) {
+  try {
+    fs.writeFileSync(sessionFile(), JSON.stringify({ session: id, at: new Date().toISOString() }, null, 2))
+    return true
+  } catch { return false }
+}
+
 function home() {
   return process.env.COMPANION_HOME || path.join(os.homedir(), '.companion')
 }
@@ -113,6 +132,8 @@ function runJson(args, timeoutMs = 20000) {
  */
 async function resolveSession(controller) {
   if (process.env.COMPANION_DSH_SESSION) return process.env.COMPANION_DSH_SESSION
+  const pinned = pinnedSession()
+  if (pinned) return pinned
   try {
     if (!controller || typeof controller.list !== 'function') return ''
     const raw = await controller.list()
@@ -249,7 +270,11 @@ export default {
         const hhmm = new Date().toLocaleTimeString('zh-CN', {
           hour: '2-digit', minute: '2-digit', hour12: false,
         })
-        const text = `现在 ${hhmm}。${e.reason || '有点想找他说话'}。`
+        const bits = []
+        if (e.mood) bits.push(`心情${e.mood}`)
+        if (e.quota) bits.push(`今天第 ${e.quota} 次开口`)
+        const ctxLine = bits.length ? `（${bits.join('，')}）` : ''
+        const text = `现在 ${hhmm}。${e.reason || '有点想找他说话'}。${ctxLine}`
         const controller = ctx.get ? ctx.get('sessionController') : ctx.sessionController
         if (!controller ||
             (typeof controller.prompt !== 'function' && typeof controller.resolveAgent !== 'function')) {
@@ -316,7 +341,14 @@ export default {
           ok: r.ok, channel: r.channel, error: r.error })
         return { session: target, ok: r.ok, channel: r.channel, error: r.error }
       }),
-      reg('/dsh-companion/sessions', async () => {
+      reg('/dsh-companion/sessions', async (req) => {
+        const q = String((req && req.url) || '')
+        const setM = /[?&]set=([^&]+)/.exec(q)
+        if (setM) {
+          const id = decodeURIComponent(setM[1])
+          const ok = pinSession(id)
+          return { pinned: ok ? id : '', file: sessionFile(), ok }
+        }
         const c = typeof ctx.get === 'function' ? ctx.get('sessionController') : null
         if (!c || typeof c.list !== 'function') return { error: 'sessionController.list 不可用' }
         try {
@@ -325,6 +357,7 @@ export default {
           const flat = (Array.isArray(arr) ? arr : []).flat().filter((x) => x && typeof x === 'object')
           return {
             resolved: await resolveSession(c),
+            pinned: pinnedSession() || null,
             type: Array.isArray(raw) ? 'array' : typeof raw,
             count: flat.length,
             sample: flat.slice(0, 3).map((x) => {

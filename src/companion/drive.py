@@ -81,12 +81,15 @@ def tick(
         # 先记账再发事件：宁可少说一句，也不要重复开口
         q2 = quota_mod.record(q, now, decision["why"])
         home.save_json("quota.json", q2)
+        cap = quota_mod.cap_for(quota_cfg or {}, _owner_last_seen(home), now)
         event = events.emit(
             home, "wake_due", now,
             action=decision["action"],
             reason=decision["why"],
             est_cost=decision["cost"],
             mood=m.get("label"),
+            quota=f"{int(q2.get('count', 0))}/{cap}",
+            window="in" if clock.in_window(rhythm, now) else "out",
         )
     elif emit_silent:
         event = events.emit(
