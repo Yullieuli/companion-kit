@@ -20,7 +20,8 @@ import { fileURLToPath } from 'node:url'
 const PKG_SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src')
 const SEP = process.platform === 'win32' ? ';' : ':'
 
-const TICK_MS = 5 * 60 * 1000
+// 默认 5 分钟；COMPANION_TICK_MS 可覆盖（调试用，别在生产设太小）
+const TICK_MS = Number(process.env.COMPANION_TICK_MS) || 5 * 60 * 1000
 
 function home() {
   return process.env.COMPANION_HOME || path.join(os.homedir(), '.companion')
