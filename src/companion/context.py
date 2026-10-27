@@ -92,6 +92,7 @@ def build(
     owner_last_seen: float | None = None,
     quota_cfg: dict[str, Any] | None = None,
     memory_text: str = "",
+    opinion_text: str = "",
     person_text: str = "",
     life_text: str = "",
 ) -> Context:
@@ -106,6 +107,8 @@ def build(
     blocks.append(Block("state", state, 20))
     if memory_text.strip():
         blocks.append(Block("memory", memory_text.strip(), 40))
+    if opinion_text.strip():
+        blocks.append(Block("opinion", opinion_text.strip(), 50))
     if person_text.strip():
         blocks.append(Block("person", person_text.strip(), 60))
     if life_text.strip():
@@ -125,7 +128,7 @@ def build(
         kept.append(Block(b.name, text, b.priority))
         used += len(text) + sep
     # 输出仍按语义顺序，不按预算顺序
-    order = {"soul": 0, "state": 1, "memory": 2, "person": 3, "life": 4}
+    order = {"soul": 0, "state": 1, "memory": 2, "opinion": 3, "person": 4, "life": 5}
     kept.sort(key=lambda x: order.get(x.name, 99))
     parts = [b.text for b in kept]
     return Context(text="\n\n".join(parts), blocks=kept)

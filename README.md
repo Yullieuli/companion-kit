@@ -100,13 +100,18 @@ companion person learn --who owner --fact "讨厌开放式结局"
 companion voice say "今天想跟你说句话"    # 本地 TTS，落盘不发送
 companion device look --target desktop   # 截图 + 前台窗口
 companion device act --target phone --act tap --x 540 --y 1200
+companion react --mood satisfaction=12 --why "他说想听我说说" \
+                --opinion "它敢砍经验值是为了逼玩家真学招式" --opinion-tags 游戏 \
+                --memory-title 影之刃零 --memory-summary "敢砍经验值" --said "挺公道"
+companion opinion list                  # 她的判断清单（hunch / belief / retired）
+companion fence "外部文本" --source 群聊   # 打注围栏：命中几处、消毒后是什么
 companion group judge "这游戏真好玩"      # 群聊三档：reply / lurk / ignore
 companion sticker add ./图.png --mood 无语 --tags 翻白眼
 companion sticker pick --mood 无语        # 没合适的就返回空，不凑合
-companion mcp --list                    # 列出 20 个 MCP 工具
+companion mcp --list                    # 列出 24 个 MCP 工具
 ```
 
-**133 个单测**，全部离线可跑。
+**158 个单测**，全部离线可跑。
 
 | 层 | 做了什么 |
 |---|---|
@@ -115,6 +120,9 @@ companion mcp --list                    # 列出 20 个 MCP 工具
 | **人物卡**（M3） | 关系/亲近/信任三维 + 事实追加（不覆盖，旧事实留着看变化） |
 | **手**（M4.5） | 手机(adb) / 桌面(GDI+SendInput) / 浏览器(CDP) / 游戏(窗口)，**五道闸先于能力** |
 | **语音**（M5.5） | edge-tts → SAPI → say → espeak 依次回退；唱歌先做 TTS 降级版 |
+| **写回**（M3） | `react` 是唯一写入口：心情/人物卡/记忆/观点/生活/说过的话，一次落完，并返回她变成了什么样 |
+| **观点**（M3） | hunch → belief → retired；重复说同一句是强化不是新增；衰减 ×0.998/天，被反驳掉得快 |
+| **围栏**（§8） | 外部文本打标 + 消毒 + **记忆投毒防线**：被弹幕骗着写下的"事实"会在写入时被滤掉并留痕 |
 | **群聊**（M4） | 三档 reply/lurk/ignore：被点名必回、冷却潜水、一小时上限、连续潜水转无视 |
 | **表情**（M4） | 按情绪目录 + 标签挑，最近发过的降权，没有对得上的**就不发** |
 | **MCP**（M6） | 15 个工具，stdio JSON-RPC；codex / openclaw / 任何 MCP 客户端可直接挂 |
@@ -140,6 +148,7 @@ companion mcp --list                    # 列出 20 个 MCP 工具
 |---|---|
 | 想（不花钱） | `companion_context` `companion_status` `companion_tick` `companion_events` `companion_cost` |
 | 记 | `companion_memory_write` `companion_memory_search` `companion_life_record` `companion_life_mark_shared` `companion_person` |
+| 写 | `companion_react` `companion_opinion` `companion_mood` `companion_fence` |
 | 聊 | `companion_group_judge` `companion_group_note` `companion_sticker_pick` `companion_sticker_add` `companion_sticker_stats` |
 | 做 | `companion_say` `companion_voice` `device_look` `device_act` `device_open` |
 

@@ -27,9 +27,10 @@ import argparse
 import json
 import sys
 from datetime import datetime
+from pathlib import Path
 
 from . import context as context_mod
-from . import cost, drive, events, group, life, memory, people, sticker
+from . import cost, drive, events, fence, group, life, memory, mood as mood_mod, opinion, people, react as react_mod, sticker
 from .store import Home
 
 
@@ -55,6 +56,7 @@ def cmd_context(home: Home, args) -> int:
         home,
         budget=args.budget,
         memory_text=memory.render(home, args.query or ""),
+        opinion_text=opinion.render(home, args.query or ""),
         person_text=people.render(home, people.OWNER),
         life_text=life.render(home),
     )
@@ -191,6 +193,97 @@ def cmd_person(home: Home, args) -> int:
 
 
 # ── 手 ─────────────────────────────────────────────────────
+def cmd_react(home: Home, args) -> int:
+    payload: dict = {}
+    if args.source_file:
+        try:
+            payload = json.loads(Path(args.source_file).read_text(encoding="utf-8"))
+        except Exception as e:
+            _dump({"ok": False, "error": f"读不了 {args.source_file}: {e}"}, True)
+            return 1
+    delta = {}
+    for kv in args.mood or []:
+        if "=" not in kv:
+            continue
+        k, v = kv.split("=", 1)
+        try:
+            delta[k.strip()] = float(v)
+        except ValueError:
+            continue
+    out = react_mod.react(
+        home,
+        mood_delta=delta or payload.get("mood_delta"),
+        why=args.why or payload.get("why", ""),
+        person=args.person or payload.get("person", ""),
+        facts=args.fact or payload.get("facts"),
+        memory_page=payload.get("memory") or (
+            {"title": args.memory_title, "summary": args.memory_summary,
+             "body": args.memory_body, "tags": args.memory_tags or []}
+            if args.memory_title and args.memory_summary else None),
+        opinion_item=payload.get("opinion") or (
+            {"claim": args.opinion, "tags": args.opinion_tags or []} if args.opinion else None),
+        life_event=payload.get("life") or (
+            {"title": args.life, "kind": args.life_kind, "detail": args.life_detail or ""} if args.life else None),
+        said=args.said or payload.get("said", ""),
+    )
+    _dump(out if args.json else json.dumps(out, ensure_ascii=False, indent=2), args.json)
+    return 0
+
+
+def cmd_opinion(home: Home, args) -> int:
+    if args.action == "add":
+        o = opinion.add(home, args.claim, tags=args.tags or [], confidence=args.confidence)
+        _dump(o.as_dict() if args.json else f"记下了（{o.stage}）：{o.claim}", args.json)
+    elif args.action == "reinforce":
+        _dump(opinion.reinforce(home, args.id).as_dict(), True) if args.json else print("强化了")
+    elif args.action == "weaken":
+        _dump(opinion.weaken(home, args.id).as_dict(), True) if args.json else print("削弱了")
+    elif args.action == "stats":
+        st = opinion.stats(home)
+        _dump(st if args.json else json.dumps(st, ensure_ascii=False, indent=2), args.json)
+    else:
+        items = [o.as_dict() for o in opinion.theses(home)]
+        if args.json:
+            _dump(items, True)
+        else:
+            for o in opinion.theses(home):
+                mark = "信念" if o.stage == "belief" else "猜测"
+                print(f"[{mark} {o.confidence:.2f}] {o.claim}")
+            if not items:
+                print("（还没有任何判断）")
+    return 0
+
+
+def cmd_mood(home: Home, args) -> int:
+    if args.action == "nudge":
+        delta = {}
+        for kv in args.delta or []:
+            if "=" in kv:
+                k, v = kv.split("=", 1)
+                try:
+                    delta[k.strip()] = float(v)
+                except ValueError:
+                    pass
+        st = mood_mod.apply_delta(home.mood(), delta, why=args.why or "")
+        home.save_json("mood/state.json", st)
+    else:
+        st = mood_mod.decay(home.mood())
+    _dump({"mood": st, "summary": mood_mod.summary(st)} if args.json else mood_mod.summary(st), args.json)
+    return 0
+
+
+def cmd_fence(home: Home, args) -> int:
+    if args.show_wrapped:
+        _dump(fence.wrap(args.text, args.source), args.json)
+        return 0
+    hits = fence.scan(args.text)
+    safe, _ = fence.sanitize(args.text)
+    out = {"safe": not hits, "hits": hits, "text": safe}
+    _dump(out if args.json else (f"命中 {len(hits)} 处" + ("" if not hits else "：" + "、".join(h["name"] for h in hits))
+                                 + f"\n消毒后：{safe}"), args.json)
+    return 0
+
+
 def cmd_group(home: Home, args) -> int:
     if args.action == "note":
         if args.mode == "reply":
@@ -319,6 +412,40 @@ def build_parser() -> argparse.ArgumentParser:
     pe.add_argument("who", nargs="?", default=people.OWNER)
     pe.add_argument("--fact", default="")
 
+    rc = sub.add_parser("react", help="把这一轮的感受写回去（心情/人物卡/记忆/观点/生活）")
+    rc.add_argument("--from", dest="source_file", help="从一个 JSON 文件读整包")
+    rc.add_argument("--why", default="")
+    rc.add_argument("--person", default="")
+    rc.add_argument("--mood", action="append", metavar="轴=值", help="可重复，如 closeness=3")
+    rc.add_argument("--fact", action="append", help="关于他的新事实，可重复")
+    rc.add_argument("--opinion", default="")
+    rc.add_argument("--opinion-tags", nargs="*")
+    rc.add_argument("--memory-title", default="")
+    rc.add_argument("--memory-summary", default="")
+    rc.add_argument("--memory-body", default="")
+    rc.add_argument("--memory-tags", nargs="*")
+    rc.add_argument("--life", default="")
+    rc.add_argument("--life-kind", default="watch", choices=list(life.KIND_VERB))
+    rc.add_argument("--life-detail", default="")
+    rc.add_argument("--said", default="")
+
+    op = sub.add_parser("opinion", help="她的判断")
+    op.add_argument("action", choices=["list", "add", "reinforce", "weaken", "stats"], nargs="?", default="list")
+    op.add_argument("claim", nargs="?", default="")
+    op.add_argument("--id", default="")
+    op.add_argument("--tags", nargs="*")
+    op.add_argument("--confidence", type=float, default=0.45)
+
+    md = sub.add_parser("mood", help="心情")
+    md.add_argument("action", choices=["get", "nudge"], nargs="?", default="get")
+    md.add_argument("--delta", action="append", metavar="轴=值")
+    md.add_argument("--why", default="")
+
+    fc = sub.add_parser("fence", help="给外部文本打注围栏 / 消毒")
+    fc.add_argument("text")
+    fc.add_argument("--source", default="外部")
+    fc.add_argument("--show-wrapped", action="store_true")
+
     g = sub.add_parser("group", help="群聊该不该接话")
     g.add_argument("action", choices=["judge", "note", "status"], nargs="?", default="judge")
     g.add_argument("text", nargs="?", default="")
@@ -375,6 +502,10 @@ def main(argv: list[str] | None = None) -> int:
         "person": cmd_person,
         "device": cmd_device,
         "group": cmd_group,
+        "react": cmd_react,
+        "opinion": cmd_opinion,
+        "mood": cmd_mood,
+        "fence": cmd_fence,
         "sticker": cmd_sticker,
         "voice": cmd_voice,
         "mcp": cmd_mcp,

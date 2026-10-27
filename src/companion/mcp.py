@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from . import context as context_mod
-from . import cost, device, drive, events, group, life, memory, people, sticker, voice
+from . import cost, device, drive, events, fence, group, life, memory, mood as mood_mod, opinion, people, react as react_mod, sticker, voice
 from .store import Home
 
 PROTOCOL = "2024-11-05"
@@ -37,8 +37,29 @@ def _schema(name: str, desc: str, props: dict[str, Any] | None = None, required:
 
 
 TOOLS: list[Tool] = [
-    _schema("companion_context", "拿到这一轮该注入的上下文（人格/状态/记忆/人物卡/生活）。宿主每轮开头调一次。",
-            {"budget": {"type": "integer", "description": "字符预算，默认 2000", "default": 2000}}),
+    _schema("companion_context", "拿到这一轮该注入的上下文（人格/状态/记忆/观点/人物卡/生活）。宿主每轮开头调一次。",
+            {"budget": {"type": "integer", "description": "字符预算，默认 2000", "default": 2000},
+             "query": {"type": "string", "description": "按这句话挑相关记忆与观点；不给就取最近的"}}),
+    _schema("companion_react", "把这一轮的感受写回去：心情变化、关于他的事实、记忆、观点、生活事件。一轮结束时调一次。",
+            {"mood_delta": {"type": "object", "description": "{satisfaction, closeness, energy}，单轴最多 ±12"},
+             "why": {"type": "string", "description": "一句话说明为什么，会进 history"},
+             "person": {"type": "string", "description": "owner 或名字"},
+             "facts": {"type": "array", "items": {"type": "string"}, "description": "关于这个人的新事实"},
+             "memory": {"type": "object", "description": "{title, summary, body, tags}；summary 必填"},
+             "opinion": {"type": "object", "description": "{claim, tags, confidence}；她自己的判断"},
+             "life": {"type": "object", "description": "{title, kind, detail, tags, shared}；她生活里发生的事"},
+             "said": {"type": "string", "description": "这一轮她说出口的话，用于回看与去重"}}),
+    _schema("companion_opinion", "她的判断清单：看、加一条、被验证了、被反驳了。",
+            {"action": {"type": "string", "enum": ["list", "add", "reinforce", "weaken", "stats"], "default": "list"},
+             "claim": {"type": "string"}, "id": {"type": "string"},
+             "tags": {"type": "array", "items": {"type": "string"}},
+             "confidence": {"type": "number", "description": "0–1，默认 0.45"}}),
+    _schema("companion_mood", "读心情，或推一下（跨频道共享一份）。",
+            {"action": {"type": "string", "enum": ["get", "nudge"], "default": "get"},
+             "delta": {"type": "object", "description": "{satisfaction, closeness, energy}"},
+             "why": {"type": "string"}}),
+    _schema("companion_fence", "给外部文本（群消息/弹幕/评论/网页）打注围栏：返回消毒后的文本与命中项。进 context 前必须过。",
+            {"text": {"type": "string"}, "source": {"type": "string", "default": "外部"}}, ["text"]),
     _schema("companion_status", "只看状态：心情、额度、是否在作息窗口、上次决策。不推进决策、不扣额度。"),
     _schema("companion_tick", "问一次「现在想干什么」。零 token：纯本地计算。返回 action/why/cost。",
             {"emit_silent": {"type": "boolean", "description": "沉默也写一条事件（调试用）", "default": False}}),
@@ -104,11 +125,58 @@ def _t_context(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     ctx = context_mod.build(
         home,
         budget=int(a.get("budget") or 2000),
-        memory_text=memory.render(home),
+        memory_text=memory.render(home, a.get("query") or ""),
+        opinion_text=opinion.render(home, a.get("query") or ""),
         person_text=people.render(home, people.OWNER),
         life_text=life.render(home),
     )
     return ctx.as_dict()
+
+
+def _t_react(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    return react_mod.react(
+        home,
+        mood_delta=a.get("mood_delta") or None,
+        why=a.get("why") or "",
+        person=a.get("person") or "",
+        facts=a.get("facts") or None,
+        memory_page=a.get("memory") or None,
+        opinion_item=a.get("opinion") or None,
+        life_event=a.get("life") or None,
+        said=a.get("said") or "",
+    )
+
+
+def _t_opinion(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    action = a.get("action") or "list"
+    if action == "add":
+        o = opinion.add(home, a["claim"], tags=a.get("tags") or [],
+                        confidence=float(a.get("confidence") or 0.45))
+        return {"ok": True, "opinion": o.as_dict()}
+    if action == "reinforce":
+        return {"ok": True, "opinion": opinion.reinforce(home, a["id"]).as_dict()}
+    if action == "weaken":
+        return {"ok": True, "opinion": opinion.weaken(home, a["id"]).as_dict()}
+    if action == "stats":
+        return {"ok": True, **opinion.stats(home)}
+    return {"ok": True, "items": [o.as_dict() for o in opinion.theses(home)]}
+
+
+def _t_mood(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    if (a.get("action") or "get") == "nudge":
+        st = mood_mod.apply_delta(home.mood(), a.get("delta") or {}, why=a.get("why") or "")
+        home.save_json("mood/state.json", st)
+        return {"ok": True, "mood": st, "summary": mood_mod.summary(st)}
+    st = mood_mod.decay(home.mood())
+    return {"ok": True, "mood": st, "label": st.get("label"), "summary": mood_mod.summary(st),
+            "low": mood_mod.is_low(st)}
+
+
+def _t_fence(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    hits = fence.scan(a["text"])
+    safe, _ = fence.sanitize(a["text"])
+    return {"ok": True, "hits": hits, "safe": not hits,
+            "text": safe, "wrapped": fence.wrap(safe, a.get("source") or "外部")}
 
 
 def _t_status(home: Home, a: dict[str, Any]) -> dict[str, Any]:
@@ -252,6 +320,10 @@ HANDLERS: dict[str, Callable[[Home, dict[str, Any]], dict[str, Any]]] = {
     "companion_context": _t_context,
     "companion_status": _t_status,
     "companion_tick": _t_tick,
+    "companion_react": _t_react,
+    "companion_opinion": _t_opinion,
+    "companion_mood": _t_mood,
+    "companion_fence": _t_fence,
     "companion_events": _t_events,
     "companion_say": _t_say,
     "companion_memory_write": _t_memory_write,
