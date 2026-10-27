@@ -1,0 +1,32 @@
+{
+  "name": "dsh-plugin-companion",
+  "version": "0.0.1",
+  "description": "companion-kit 的 DSH 适配器：把跨宿主的伴侣运行时（人格/记忆/心情/作息/自主决策）接进 DeepSeek Harness。核心是 Python，这个包只是一层薄壳。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "companion",
+    "agent",
+    "memory"
+  ],
+  "type": "module",
+  "main": "dsh/index.js",
+  "exports": {
+    ".": "./dsh/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dsh",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "python3 -m unittest discover -s tests -t ."
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
