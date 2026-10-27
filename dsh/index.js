@@ -97,12 +97,46 @@ function runJson(args, timeoutMs = 20000) {
   })
 }
 
+
+/** 解析要投递的会话：
+ *  1) COMPANION_DSH_SESSION 显式指定
+ *  2) sessionController.list() 里挑一个（优先最近的）
+ *  list() 在 DSH 里是异步的，返回结构还可能是 array / {sessions} / map，所以全都兜住。
+ */
+async function resolveSession(controller) {
+  if (process.env.COMPANION_DSH_SESSION) return process.env.COMPANION_DSH_SESSION
+  try {
+    if (!controller || typeof controller.list !== 'function') return ''
+    const raw = await controller.list()
+    let arr = []
+    if (Array.isArray(raw)) arr = raw
+    else if (raw && Array.isArray(raw.sessions)) arr = raw.sessions
+    else if (raw && Array.isArray(raw.items)) arr = raw.items
+    else if (raw && typeof raw === 'object') arr = Object.values(raw)
+    arr = arr.flat().filter((x) => x && typeof x === 'object')
+    const idOf = (x) => x.id || x.sessionId || x.key || x.session_id
+    const scored = arr
+      .filter((x) => idOf(x))
+      .sort((a, b) => {
+        const ta = Date.parse(a.updatedAt || a.lastActiveAt || a.createdAt || 0) || 0
+        const tb = Date.parse(b.updatedAt || b.lastActiveAt || b.createdAt || 0) || 0
+        return tb - ta
+      })
+    return scored.length ? String(idOf(scored[0])) : ''
+  } catch {
+    return ''
+  }
+}
+
 export default {
   name: 'dsh-companion',
   inject: ['sessionController'],
   apply(ctx) {
     let stopped = false
     let busy = false
+    // ⚠️ 游标必须放本地。挂在 ctx 上会在严格代理下抛
+    //    "cannot get property _cursor without inject"，异常又被 setInterval 的 catch 吞掉。
+    let cursor = 0
     const log = (msg) => {
       try { console.log('[dsh-companion] ' + msg) } catch {}
     }
@@ -117,10 +151,10 @@ export default {
           log('tick 失败：' + (tick.error || '未知'))
           return
         }
-        const ev = await runJson(['events', '--since', String(ctx._cursor ?? 0)])
+        const ev = await runJson(['events', '--since', String(cursor)])
         if (!ev.ok) return
         const rows = (ev.data && ev.data.events) || []
-        ctx._cursor = (ev.data && ev.data.cursor) || ctx._cursor || 0
+        cursor = (ev.data && ev.data.cursor) || cursor
         const wake = rows.filter((e) => e && e.kind === 'wake_due')
         if (!wake.length) return
 
@@ -132,16 +166,21 @@ export default {
           log('没有 sessionController，跳过投递')
           return
         }
+        const target = await resolveSession(controller)
+        if (!target) {
+          log('没有可投递的会话（list() 空）→ 跳过；可用 COMPANION_DSH_SESSION 指定')
+          return
+        }
         try {
           await controller.prompt({
-            sessionId: SESSION,
+            sessionId: target,
             mode: 'queue',
             content: [{ type: 'text', text }],
           })
-          log(`投递 wake_due：${e.action}`)
+          log(`投递 wake_due：${e.action} → session ${target}`)
         } catch (err) {
-          log(`投递失败（sessionId=${SESSION}）：` + String(err && err.message) +
-            ' —— 用 COMPANION_DSH_SESSION 指定你 DSH 里真实存在的会话 id')
+          log(`投递失败（sessionId=${target}）：` + String(err && err.message) +
+            ' —— 用 COMPANION_DSH_SESSION 指定真实会话 id')
         }
       } finally {
         busy = false
@@ -178,6 +217,29 @@ export default {
         const r = await runJson(['context', '--budget', '1600'])
         return r.ok ? r.data : r
       })
+      reg('/dsh-companion/sessions', async () => {
+        const c = typeof ctx.get === 'function' ? ctx.get('sessionController') : null
+        if (!c || typeof c.list !== 'function') return { error: 'sessionController.list 不可用' }
+        try {
+          const raw = await c.list()
+          const arr = Array.isArray(raw) ? raw : (raw && (raw.sessions || raw.items)) || []
+          const flat = (Array.isArray(arr) ? arr : []).flat().filter((x) => x && typeof x === 'object')
+          return {
+            resolved: await resolveSession(c),
+            type: Array.isArray(raw) ? 'array' : typeof raw,
+            count: flat.length,
+            sample: flat.slice(0, 3).map((x) => {
+              const out = {}
+              for (const k of ['id', 'sessionId', 'key', 'title', 'name', 'updatedAt', 'createdAt']) {
+                if (x[k] !== undefined) out[k] = typeof x[k] === 'string' ? x[k].slice(0, 80) : x[k]
+              }
+              return out
+            }),
+          }
+        } catch (e) {
+          return { error: String(e && e.message) }
+        }
+      }),
       reg('/dsh-companion/diag', async () => ({
         session: SESSION,
         tickMs: TICK_MS,
