@@ -136,32 +136,80 @@ async function resolveSession(controller) {
   }
 }
 
-/** 调 sessionController.prompt。
+/** 投递一条"她自己的念头"。
  *
- * 真实签名（从 DSH 的 app.asar 里挖出来的，别猜）：
- *   prompt(request: SessionPromptRequest, signal: AbortSignal)
- *   SessionPromptRequest { requestId, sessionId, mode: 'queue'|'steer', content: PromptContentPart[] }
- * 第一行就是 signal.throwIfAborted()，所以 signal 必须是真的 AbortSignal。
+ * 为什么不用 controller.prompt：那个接口把消息标成 source.kind='user'，
+ * 她会以为是主人说的，然后去回复那句提示 —— 语义不对。
+ *
+ * 正确通道（读 DSH 的 app.asar 得到）：
+ *   resolveAgent(sessionId) -> { agent } | { error }
+ *   agent.followup(message) / inject(message) / send(message, target, wakeup)
+ *   消息 source: { kind: 'schedule', form: 'notice', summary } —— 定时/合成提示，
+ *   界面上是折叠 chip，不会被当成用户发言。
+ *
+ * 三级回退：followup → inject → send → controller.prompt（最后手段，会变成用户消息）
  */
 let _reqSeq = 0
-function newRequestId() {
+function newId(prefix) {
   _reqSeq += 1
-  return `companion-${Date.now()}-${_reqSeq}`
+  const rnd = (globalThis.crypto && globalThis.crypto.randomUUID)
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now()}-${_reqSeq}`
+  return `${prefix}-${rnd}`
 }
 
-async function promptSession(controller, sessionId, text) {
-  const ac = new AbortController()
-  const request = {
-    requestId: newRequestId(),
-    sessionId,
-    mode: 'queue',
+function buildMessage(text) {
+  return {
+    id: newId('companion-msg'),
+    role: 'user',
     content: [{ type: 'text', text }],
+    source: { kind: 'schedule', form: 'notice', summary: '她自己的想法' },
   }
+}
+
+async function deliver(controller, sessionId, text) {
+  const msg = buildMessage(text)
+  let lastErr = ''
+
+  // ── 1. 合成消息（首选）──
+  let found = null
   try {
-    await controller.prompt(request, ac.signal)
-    return { ok: true, shape: 'request+signal', error: '' }
+    if (typeof controller.resolveAgent === 'function') found = await controller.resolveAgent(sessionId)
   } catch (e) {
-    return { ok: false, shape: '', error: String((e && e.message) || e) }
+    lastErr = 'resolveAgent: ' + String((e && e.message) || e)
+  }
+  const agent = found && found.agent
+  if (agent) {
+    for (const m of ['followup', 'inject']) {
+      if (typeof agent[m] !== 'function') continue
+      try {
+        await agent[m](msg)
+        return { ok: true, channel: 'agent.' + m, error: '' }
+      } catch (e) {
+        lastErr = `${m}: ` + String((e && e.message) || e)
+      }
+    }
+    if (typeof agent.send === 'function') {
+      try {
+        await agent.send(msg, 'next-turn', true)
+        return { ok: true, channel: 'agent.send', error: '' }
+      } catch (e) {
+        lastErr = 'send: ' + String((e && e.message) || e)
+      }
+    }
+  } else if (found && found.error && !lastErr) {
+    lastErr = 'resolveAgent: ' + JSON.stringify(found.error).slice(0, 120)
+  }
+
+  // ── 2. 最后手段：controller.prompt（会成为 user 消息）──
+  try {
+    await controller.prompt(
+      { requestId: newId('companion-req'), sessionId, mode: 'queue', content: [{ type: 'text', text }] },
+      new AbortController().signal,
+    )
+    return { ok: true, channel: 'controller.prompt(user)', error: lastErr }
+  } catch (e) {
+    return { ok: false, channel: '', error: (lastErr ? lastErr + ' | ' : '') + String((e && e.message) || e) }
   }
 }
 
@@ -196,10 +244,15 @@ export default {
         if (!wake.length) return
 
         const e = wake[wake.length - 1]
-        const text = `【该你了】${e.reason || '想找他说话'}\n（动作：${e.action}；先 ` +
-          '`companion context` 拿一遍本轮上下文，再决定说什么）'
+        // 用她自己的口吻，不用「该你了/先跑某个命令」这种系统腔。
+        // 这是念头，不是任务说明。
+        const hhmm = new Date().toLocaleTimeString('zh-CN', {
+          hour: '2-digit', minute: '2-digit', hour12: false,
+        })
+        const text = `现在 ${hhmm}。${e.reason || '有点想找他说话'}。`
         const controller = ctx.get ? ctx.get('sessionController') : ctx.sessionController
-        if (!controller || typeof controller.prompt !== 'function') {
+        if (!controller ||
+            (typeof controller.prompt !== 'function' && typeof controller.resolveAgent !== 'function')) {
           log('没有 sessionController，跳过投递')
           return
         }
@@ -208,12 +261,12 @@ export default {
           log('没有可投递的会话（list() 空）→ 跳过；可用 COMPANION_DSH_SESSION 指定')
           return
         }
-        const r = await promptSession(controller, target, text)
+        const r = await deliver(controller, target, text)
         logDelivery(home(), {
           at: new Date().toISOString(), action: e.action, session: target,
-          ok: r.ok, shape: r.shape, error: r.error,
+          ok: r.ok, channel: r.channel, error: r.error,
         })
-        if (r.ok) log(`投递 wake_due：${e.action} → session ${target}（${r.shape}）`)
+        if (r.ok) log(`投递 wake_due：${e.action} → ${target}（${r.channel}）`)
         else log(`投递失败（sessionId=${target}）：${r.error}`)
       } finally {
         busy = false
@@ -258,10 +311,10 @@ export default {
         const target = m ? decodeURIComponent(m[1]) : await resolveSession(c)
         if (!target) return { ok: false, error: '解析不到会话 id' }
         const text = '【通道测试】这是 companion-kit 的一次投递测试，看到就说明通了。'
-        const r = await promptSession(c, target, text)
+        const r = await deliver(c, target, text)
         logDelivery(home(), { at: new Date().toISOString(), action: 'ping', session: target,
-          ok: r.ok, shape: r.shape, error: r.error })
-        return { session: target, ...r }
+          ok: r.ok, channel: r.channel, error: r.error })
+        return { session: target, ok: r.ok, channel: r.channel, error: r.error }
       }),
       reg('/dsh-companion/sessions', async () => {
         const c = typeof ctx.get === 'function' ? ctx.get('sessionController') : null
