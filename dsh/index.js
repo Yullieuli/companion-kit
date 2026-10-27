@@ -22,6 +22,9 @@ const SEP = process.platform === 'win32' ? ';' : ':'
 
 // 默认 5 分钟；COMPANION_TICK_MS 可覆盖（调试用，别在生产设太小）
 const TICK_MS = Number(process.env.COMPANION_TICK_MS) || 5 * 60 * 1000
+// 投递到哪个会话。DSH 里每个工作区会话有自己的 id，默认值多半不存在，
+// 用 COMPANION_DSH_SESSION 指定；投递失败时会打日志提示。
+const SESSION = process.env.COMPANION_DSH_SESSION || 'companion'
 
 function home() {
   return process.env.COMPANION_HOME || path.join(os.homedir(), '.companion')
@@ -131,13 +134,14 @@ export default {
         }
         try {
           await controller.prompt({
-            sessionId: 'companion',
+            sessionId: SESSION,
             mode: 'queue',
             content: [{ type: 'text', text }],
           })
           log(`投递 wake_due：${e.action}`)
         } catch (err) {
-          log('投递失败：' + String(err && err.message))
+          log(`投递失败（sessionId=${SESSION}）：` + String(err && err.message) +
+            ' —— 用 COMPANION_DSH_SESSION 指定你 DSH 里真实存在的会话 id')
         }
       } finally {
         busy = false
@@ -150,9 +154,13 @@ export default {
       clearInterval(timer)
     })
 
-    // 只读路由：给设置页 / 调试用
-    if (ctx.webServer && typeof ctx.webServer.register === 'function') {
-      const reg = (p, fn) => ctx.effect(() => ctx.webServer.register({
+    // 只读路由：给设置页 / 调试用。
+    // ⚠️ 必须用 ctx.get('webServer') 而不是 ctx.webServer —— cordis 里访问未 inject
+    //    的服务会直接抛 "cannot get property ... without inject"，整条插件激活失败。
+    //    没网页层的 profile 拿不到它，这时跳过路由，主循环照跑。
+    const webServer = (typeof ctx.get === 'function' ? ctx.get('webServer') : null) || null
+    if (webServer && typeof webServer.register === 'function') {
+      const reg = (p, fn) => ctx.effect(() => webServer.register({
         kind: 'exact',
         path: p,
         handler: async (req, res) => {

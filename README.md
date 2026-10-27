@@ -51,7 +51,10 @@ curl -fsSL https://raw.githubusercontent.com/Yullieuli/companion-kit/main/instal
 | PATH | Windows 写用户环境变量，Linux/macOS 写 shell 配置，**不用你 export** |
 | DSH | 检测到 `dsh` 就顺手 `dsh plugin add` |
 
-调试时可以用 `COMPANION_TICK_MS=1200` 把 tick 从 5 分钟缩短到 1.2 秒（别长期开着）。
+调试用两个环境变量：
+
+- `COMPANION_TICK_MS=1200` 把 tick 从 5 分钟缩到 1.2 秒（别长期开着）
+- `COMPANION_DSH_SESSION=<会话id>` 指定 `wake_due` 投递到哪个 DSH 会话（默认 `companion`，通常需要改）
 
 **DSH 桌面端**：设置 → 添加插件 → 填
 
