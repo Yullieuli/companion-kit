@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""hermes 适配层 ②：用 companion 的时钟决定"该不该叫醒她"。
+
+用法：把它设成 hermes cron 的 `monitor_script`。
+hermes 的判定是"输出变了就起会话"，而空输出现在被当作"没叫我"（不再触发）。
+于是这个脚本只需要：该说就打印一行 `WAKE|...`，不该说就什么都不打印。
+
+这样一来：
+  · pulse.py 的骰子、自由时间的三个固定时刻都不再需要，全交给 companion
+  · 一天 96 次 tick 里绝大多数是空输出，**零 token**
+  · 配额、作息、心情、预算都在 companion 的 store 里，只有一本账
+
+测法（不激活）：
+    COMPANION_HOME=/mnt/c/Users/Anran/.companion \
+      ~/.companion-venv/bin/python ~/.hermes/scripts/companion_wake.py
+    # 有输出 = 这次会叫她；没输出 = 继续睡
+
+注意：`--dry-run` 只读，不扣额度、不写事件，用来观察"现在会怎么判"。
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+
+DEFAULT_HOME = str(Path.home() / ".companion")
+
+SILENT = ("silent", "diary")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dry-run", action="store_true", help="只读：不扣额度、不写事件")
+    ap.add_argument("--json", action="store_true", help="调试：打印完整决策")
+    args = ap.parse_args()
+
+    home_path = os.environ.get("COMPANION_HOME") or DEFAULT_HOME
+    try:
+        from companion import drive
+        from companion.store import Home
+    except Exception as e:
+        print(f"companion 不可用：{e}", file=sys.stderr)
+        return 0  # 返回 0 且无输出 = 不叫醒，绝不因为适配层坏掉而乱发消息
+
+    home = Home.at(home_path)
+    try:
+        if args.dry_run:
+            from companion import initiative, mood, quota
+
+            rhythm = home.rhythm()
+            st = mood.decay(home.mood(), datetime.now())
+            allowed, why = quota.allow(home.quota(), None, datetime.now())
+            decision = initiative.decide(
+                initiative.Situation(
+                    now=datetime.now(), mood_state=st, quota_state=home.quota(), rhythm=rhythm
+                )
+            )
+            result = {**decision, "quota_allowed": allowed, "quota_why": why}
+        else:
+            result = drive.tick(home)
+    except Exception as e:
+        print(f"tick 失败：{e}", file=sys.stderr)
+        return 0
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    action = result.get("action") or "silent"
+    if action in SILENT or result.get("blocked") in ("sleep", "dice", "budget", "quota"):
+        return 0  # 空输出 = 不叫醒
+
+    reason = (result.get("why") or "").replace("|", "／")[:60]
+    print(f"WAKE|{reason}|{action}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
