@@ -91,6 +91,7 @@ def build(
     last_chat: float | None = None,
     owner_last_seen: float | None = None,
     quota_cfg: dict[str, Any] | None = None,
+    include_soul: bool = True,
     memory_text: str = "",
     opinion_text: str = "",
     person_text: str = "",
@@ -100,7 +101,9 @@ def build(
     home.init()
 
     blocks: list[Block] = []
-    soul = _head(home.soul(), min(SOUL_CAP, max(0, budget // 3)))
+    # 宿主自己已经有人格时（hermes 把它当系统提示），别再注入一份：
+    # 重复会导致两套语气打架，而且要挤占预算
+    soul = _head(home.soul(), min(SOUL_CAP, max(0, budget // 3))) if include_soul else ""
     if soul:
         blocks.append(Block("soul", soul, 10))
     state = _state_block(home, now, last_chat, owner_last_seen, quota_cfg)

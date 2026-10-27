@@ -16,7 +16,7 @@
 set -uo pipefail
 
 REPO="${COMPANION_REPO:-https://github.com/Yullieuli/companion-kit}"
-WHEEL="${COMPANION_WHEEL:-$REPO/releases/download/v0.2.2/companion_kit-0.2.2-py3-none-any.whl}"
+WHEEL="${COMPANION_WHEEL:-$REPO/releases/download/v0.2.3/companion_kit-0.2.3-py3-none-any.whl}"
 HOME_DIR="${COMPANION_HOME:-$HOME/.companion}"
 PYTHON="${COMPANION_PYTHON:-}"
 FROM=""

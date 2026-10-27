@@ -31,6 +31,42 @@ BUDGET = int(os.environ.get("COMPANION_INJECT_BUDGET", "1200") or 1200)
 CHAT_PLATFORMS = {"napcat", "qq", "onebot"}
 
 
+def _text_of(raw) -> str:
+    """hermes 的 user_message 可能是字符串、{content} 或 [{type:text,text}]。"""
+    if isinstance(raw, dict):
+        return str(raw.get("content") or "")
+    if isinstance(raw, list):
+        parts = []
+        for part in raw:
+            if isinstance(part, dict) and part.get("type") == "text":
+                parts.append(str(part.get("text") or ""))
+            elif isinstance(part, str):
+                parts.append(part)
+        return " ".join(parts)
+    return str(raw or "")
+
+
+LOG = "/tmp/companion_hook.log"
+
+
+def _note(line: str) -> None:
+    """埋点：hermes 的钩子输出不进 journal，只能自己记一行，否则没法验证有没有跑。"""
+    try:
+        from datetime import datetime
+
+        with open(LOG, "a", encoding="utf-8") as fh:
+            fh.write(f"{datetime.now():%m-%d %H:%M:%S} {line}\n")
+    except Exception:
+        pass
+
+
+def _empty(reason: str = "") -> int:
+    """没有可注入的东西时必须打印 {} —— 与 said.py 保持同一协议。"""
+    _note(f"skip {reason}")
+    print("{}")
+    return 0
+
+
 def main() -> int:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
@@ -39,20 +75,21 @@ def main() -> int:
 
     session = str(payload.get("session_id") or "")
     platform = str(payload.get("platform") or "")
-    user_text = str(payload.get("user_message") or "")
+    user_text = _text_of(payload.get("user_message"))
 
     # cron / 自由时间会话不注入：它们有自己的上下文，叠上去只会拉高 token
     if session.startswith("local-"):
-        return 0
+        return _empty("cron")
     if platform and platform not in CHAT_PLATFORMS:
-        return 0
+        return _empty(f"platform={platform}")
 
     try:
         from companion import context as ctx_mod
         from companion import life, memory, opinion, people
         from companion.store import Home
     except Exception as e:  # 装少了不该让她的对话失败
-        print(json.dumps({"context": "", "warn": f"companion 不可用：{e}"}, ensure_ascii=False))
+        _note(f"import-fail {type(e).__name__}: {e}")
+        print(json.dumps({"warn": f"companion 不可用：{e}"}, ensure_ascii=False))
         return 0
 
     home = Home.at(os.environ.get("COMPANION_HOME") or DEFAULT_HOME)
@@ -60,6 +97,8 @@ def main() -> int:
         ctx = ctx_mod.build(
             home,
             budget=BUDGET,
+            # hermes 的 system prompt 里已经有人格，这里只补她没有的状态与记忆
+            include_soul=False,
             memory_text=memory.render(home, user_text),
             opinion_text=opinion.render(home, user_text),
             person_text=people.render(home, people.OWNER),
@@ -67,12 +106,12 @@ def main() -> int:
         )
         text = ctx.text.strip()
     except Exception as e:
-        print(json.dumps({"context": "", "warn": f"伴生上下文构建失败：{e}"}, ensure_ascii=False))
+        print(json.dumps({"warn": f"上下文构建失败：{e}"}, ensure_ascii=False))
         return 0
 
-    # 空 store（还没写 SOUL）时不要塞一堆模板占位符进去
-    if not text or "（名字、来历" in text:
-        return 0
+    if not text:
+        return _empty("empty-context")
+    _note(f"inject {len(text)}c session={session[:24]}")
     print(json.dumps({"context": text}, ensure_ascii=False))
     return 0
 

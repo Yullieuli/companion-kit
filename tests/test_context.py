@@ -67,6 +67,18 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(ha["soul"], hb["soul"])
         self.assertEqual(ha["state"], hb["state"])
 
+    def test_include_soul_false_drops_persona_block(self):
+        """宿主自己有人格时（hermes 把它当系统提示），不该再注入一份。"""
+        from companion import context as ctx_mod
+        self.home.init()
+        (self.home.root / "SOUL.md").write_text("# 我是谁\n\n人格正文。", encoding="utf-8")
+        with_soul = ctx_mod.build(self.home, budget=800)
+        without = ctx_mod.build(self.home, budget=800, include_soul=False)
+        self.assertIn("人格正文", with_soul.text)
+        self.assertNotIn("人格正文", without.text)
+        self.assertNotIn("soul", [b.name for b in without.blocks])
+        self.assertIn("state", [b.name for b in without.blocks])
+
 
 class CacheTest(unittest.TestCase):
     def test_only_changed_blocks_reported(self):
@@ -82,6 +94,6 @@ class CacheTest(unittest.TestCase):
         cache.changed("s1", [context.Block("soul", "a"), context.Block("life", "x")])
         self.assertEqual(cache.changed("s1", [context.Block("soul", "a")]), ["life"])
 
-
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
