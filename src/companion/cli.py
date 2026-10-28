@@ -432,7 +432,7 @@ def cmd_doctor(home: Home, args) -> int:
     mods = [
         ("device", "手（闸 + 分发）"), ("devwin", "桌面截图/输入（ctypes）"),
         ("devcdp", "浏览器 CDP（socket）"), ("imgpng", "PNG 编码"),
-        ("voice", "语音"), ("mcp", "MCP 服务"),
+        ("voice", "语音"), ("mcp", "MCP 服务"), ("ask", "动手前的请示"),
         ("bilinet", "B 站传输（WBI/节流/熔断）"), ("bili", "刷 B 站（挑/读/分享）"),
     ]
     checks: list[dict[str, Any]] = []
