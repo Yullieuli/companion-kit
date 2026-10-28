@@ -66,6 +66,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "ask": {"enabled": True, "actions": ["open", "focus"], "targets": ["game"]},
     # OCR 只是"帮她把图上的字先读一遍"，读不到就让模型的 vision 看，不影响别的
     "ocr": {"enabled": True, "lang": "chi_sim+eng", "min_conf": 40},
+    # WSL 里跑时把 device 转发给 Windows 侧（见 devdelegate.py）。不配就一直报"本机不支持"。
+    "windows": {"python": "", "src": ""},
 }
 
 
@@ -93,6 +95,7 @@ def config(home: Home) -> dict[str, Any]:
     out.update({k: v for k, v in d.items() if k in DEFAULT_CONFIG})
     out["ask"] = {**DEFAULT_CONFIG["ask"], **(d.get("ask") or {})}
     out["ocr"] = {**DEFAULT_CONFIG["ocr"], **(d.get("ocr") or {})}
+    out["windows"] = {**DEFAULT_CONFIG["windows"], **(d.get("windows") or {})}
     return out
 
 
@@ -247,6 +250,28 @@ def phone_open(package: str, *, serial: str = "") -> str:
 
 
 # ── 对外三个动作：看 / 动 / 开 ──────────────────────────────
+def _prune_shots(home: Home, *, keep: int = 60, days: float = 7) -> int:
+    """清掉旧截图。一张双屏 PNG 就 2MB，不清的话一天几百兆。
+
+    只动 `shots/` 顶层（就是 look 拍的那些），bili 的封面/抽帧在子目录，归它自己的 7 天缓存管。
+    """
+    root = home.root / "shots"
+    if not root.exists():
+        return 0
+    files = [p for p in root.glob("*.png") if p.is_file()]
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    cutoff = time.time() - days * 86400
+    removed = 0
+    for i, p in enumerate(files):
+        try:
+            if i >= keep or p.stat().st_mtime < cutoff:
+                p.unlink()
+                removed += 1
+        except Exception:
+            continue
+    return removed
+
+
 def look(home: Home, target: str = "desktop", *, serial: str = "",
          window: str = "") -> dict[str, Any]:
     v = check(home, target=target, action="look")
@@ -276,6 +301,7 @@ def look(home: Home, target: str = "desktop", *, serial: str = "",
         over = size_kb > int(config(home).get("max_screenshot_kb") or 3000)
         _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": target,
                     "action": "look", "ok": True, "shot": str(p), "kb": size_kb})
+        _prune_shots(home)
         out = {"ok": True, "target": target, "shot": str(p), "kb": size_kb, **meta}
         if over:
             # 超过上限就明确说一句：宿主要把图缩放/裁剪，别整张塞进上下文
@@ -521,6 +547,10 @@ def ocr_image(home: Home, shot: str | Path, *, lang: str = "") -> dict[str, Any]
             "hint": (done.stderr or "")[:200]}
 
 
+DESCRIBE_HINT = ("先用 ocr.text 回答能读到的内容；读不到再看图。"
+                 "画面里出现的文字/按钮/报错，照原样引用，别概括。")
+
+
 def observe(home: Home, target: str = "desktop", *, window: str = "",
             serial: str = "", ocr: bool = True) -> dict[str, Any]:
     """看：一张图 + 一句"这是哪" + 图上的字（如果有引擎）。
@@ -534,8 +564,7 @@ def observe(home: Home, target: str = "desktop", *, window: str = "",
     out = dict(got)
     if ocr:
         out["ocr"] = ocr_image(home, got["shot"])
-    out["describe_hint"] = ("先用 ocr.text 回答能读到的内容；读不到再看图。"
-                            "画面里出现的文字/按钮/报错，照原样引用，别概括。")
+    out["describe_hint"] = DESCRIBE_HINT
     _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": target,
                 "action": "observe", "ok": True, "shot": got.get("shot"),
                 "window": window or "", "ocr": (out.get("ocr") or {}).get("backend")})

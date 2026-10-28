@@ -30,6 +30,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import context as context_mod
+from . import device, devdelegate
 from . import cost, drive, events, fence, group, life, memory, mood as mood_mod, opinion, people, react as react_mod, sticker
 from .store import Home
 
@@ -694,8 +695,38 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    raw = list(argv) if argv is not None else sys.argv[1:]
+    args = build_parser().parse_args(raw)
     home = Home.at(args.home)
+    # WSL 里没有 Win32：把 device 整个交给 Windows 侧同一份代码跑
+    if args.cmd == "device" and devdelegate.wanted(home):
+        fwd, skip = [], False
+        for tok in raw:
+            if skip:
+                skip = False
+                continue
+            if tok == "--home":
+                skip = True
+                continue
+            if tok.startswith("--home="):
+                continue
+            fwd.append(tok)
+        if args.action == "observe":
+            # 截图要 Windows 做，认字要 WSL 做（tesseract 装在这边），所以拆成两步
+            remote = ["look" if t == "observe" else t for t in fwd if t != "--no-ocr"]
+            rc, out, err = devdelegate.run(remote, home)
+            if rc != 0 or not out.strip().startswith("{"):
+                sys.stdout.write(out)
+                if err.strip():
+                    sys.stderr.write(err)
+                return rc
+            data = json.loads(out)
+            if data.get("ok") and not getattr(args, "no_ocr", False):
+                data["ocr"] = device.ocr_image(home, data.get("shot") or "")
+                data["describe_hint"] = device.DESCRIBE_HINT
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+            return rc
+        return devdelegate.call(fwd, home)
     table = {
         "init": cmd_init,
         "context": cmd_context,

@@ -300,3 +300,45 @@ class ObserveTest(unittest.TestCase):
         self.assertEqual(calls["want"], "记事本")
         self.assertEqual(got["window"], "记事本")
         self.assertFalse(desk.called)
+
+
+class ShotPruneTest(unittest.TestCase):
+    """截图会堆：一张双屏 PNG 就 2MB，不清三天就一个 G。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+        self.dir = self.home.root / "shots"
+        self.dir.mkdir(exist_ok=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_keeps_newest_and_drops_old(self):
+        import os
+        import time as _t
+
+        now = _t.time()
+        for i in range(8):
+            p = self.dir / f"s{i}.png"
+            p.write_bytes(b"x")
+            os.utime(p, (now - i * 60, now - i * 60))
+        old = self.dir / "ancient.png"
+        old.write_bytes(b"x")
+        os.utime(old, (now - 30 * 86400, now - 30 * 86400))
+
+        removed = device._prune_shots(self.home, keep=5, days=7)
+        left = {p.name for p in self.dir.glob("*.png")}
+        self.assertEqual(len(left), 5)
+        self.assertNotIn("ancient.png", left)      # 太老，即使没超数量也删
+        self.assertIn("s0.png", left)              # 最新的留着
+        self.assertGreaterEqual(removed, 4)
+
+    def test_does_not_touch_bili_subdir(self):
+        sub = self.dir / "bili" / "frames"
+        sub.mkdir(parents=True, exist_ok=True)
+        keep = sub / "BV1.png"
+        keep.write_bytes(b"x")
+        device._prune_shots(self.home, keep=0, days=0)
+        self.assertTrue(keep.exists())

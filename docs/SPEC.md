@@ -1,6 +1,6 @@
 # 规格：companion-kit（跨 agent 的伴侣运行时）
 
-> 状态：**实施中**（0.5.0）。逐项完成情况见 §12。
+> 状态：**实施中**（0.5.1）。逐项完成情况见 §12。
 > 目标读者：未来的我、以及任何要接手这套东西的人。
 
 ## 1. 一句话
@@ -331,7 +331,7 @@ MCP 工具（三个，不拆细）：
 | §5.2 Context 注入 | 🟡 | 五块（+ 观点共六块）、优先级、预算、块 hash 都在；**投影去重（`context.Cache`）尚无宿主调用** |
 | §5.3 事件订阅 | 🟡 | append-only + cursor + 长轮询 ✅；`wake_due` / `spend_guard` / `mood_shift` 都会发；**HTTP `/events` ❌** |
 | §5.4 文件协议 | 🟡 | 结构与规格有两处偏差：`people/*.json`（规格为 `.md`）、`life/life.jsonl`（规格为按日目录）。`opinions.jsonl` ✅、`bili/*` ✅。**编年史已收成一本**：`life/life.jsonl` 是唯一账本，旧 `proactive/life.jsonl` 降级为只读投影（迁移期给老读者看） |
-| §5.5 设备控制 | ✅ | 四类目标 + Screen/Input 双 port，五道闸 + `ask` 请示闸；`swipe`/`key`（桌面 SendInput + 浏览器 CDP）、窗口列表/切前台、游戏前台校验 + 坐标换算、窗口级截图（PrintWindow，被盖住也能抓）、`Observe`（本地 tesseract OCR，中文实测可用；无引擎时交宿主的 vision）、动作前后两张图（`before=true`）全部就绪。双屏按虚拟桌面取尺寸与原点 |
+| §5.5 设备控制 | ✅ | 四类目标 + Screen/Input 双 port，五道闸 + `ask` 请示闸；`swipe`/`key`（桌面 SendInput + 浏览器 CDP）、窗口列表/切前台、游戏前台校验 + 坐标换算、窗口级截图（PrintWindow，被盖住也能抓）、`Observe`（本地 tesseract OCR，中文实测可用；无引擎时交宿主的 vision）、动作前后两张图（`before=true`）全部就绪。双屏按虚拟桌面取尺寸与原点；截图只留最近 60 张 / 7 天。宿主在 WSL 时 `device` 自动转发给 Windows 侧同一份代码（`devdelegate`），截图在 Windows 拍、OCR 在 WSL 认 |
 | §5.6 语音 | 🟡 | TTS ✅、唱歌降级版 ✅、边界闸 ✅；SVC ❌（明确 P3） |
 | §5.7 成本 | 🟡 | 前缀分层 / 事件门 / 本地先做 / 预算闸 ✅；分级模型 ✅（`cost.route(task)` → 档位/模型/估价，可被 `cost/route.json` 覆盖）；块级去重只在 `Cache` 里，宿主尚未真正使用 |
 | §5.8 自主性 | ✅ | 七候选（含刷 B 站）+ 硬闸 + 便宜优先；说话额度用尽时仍可日记/刷片；`ask` 流程（开程序/切窗口/动游戏先请示，许可一次性、30 分钟、绑定动作）；人格只从 SOUL.md 读、无写接口 |
