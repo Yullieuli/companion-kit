@@ -196,7 +196,8 @@ def _t_status(home: Home, a: dict[str, Any]) -> dict[str, Any]:
 
 
 def _t_tick(home: Home, a: dict[str, Any]) -> dict[str, Any]:
-    return drive.tick(home, now=datetime.now(), emit_silent=bool(a.get("emit_silent")))
+    return drive.tick(home, host=str(a.get("host") or "mcp"), now=datetime.now(),
+                      emit_silent=bool(a.get("emit_silent")))
 
 
 def _t_events(home: Home, a: dict[str, Any]) -> dict[str, Any]:

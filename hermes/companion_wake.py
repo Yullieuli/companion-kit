@@ -28,6 +28,7 @@ from datetime import datetime
 from pathlib import Path
 
 DEFAULT_HOME = str(Path.home() / ".companion")
+HOST = os.environ.get("COMPANION_HOST", "hermes")
 
 SILENT = ("silent", "diary")
 
@@ -61,7 +62,7 @@ def main() -> int:
             )
             result = {**decision, "quota_allowed": allowed, "quota_why": why}
         else:
-            result = drive.tick(home)
+            result = drive.tick(home, host=HOST)
     except Exception as e:
         print(f"tick 失败：{e}", file=sys.stderr)
         return 0

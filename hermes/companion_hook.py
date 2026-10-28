@@ -93,6 +93,21 @@ def main() -> int:
         return 0
 
     home = Home.at(os.environ.get("COMPANION_HOME") or DEFAULT_HOME)
+
+    # 记一笔"主人最后说话时间"：沉默衰减（3 天降额、7 天归零）靠它。
+    # 不记的话 companion 永远以为他刚说过话，衰减机制等于没开。
+    if user_text.strip():
+        try:
+            from datetime import datetime
+
+            home.append_jsonl("logs/turns.jsonl", {
+                "at": datetime.now().isoformat(timespec="seconds"),
+                "role": "user", "platform": platform, "chars": len(user_text),
+                "session": session[:32],
+            })
+        except Exception:
+            pass
+
     try:
         ctx = ctx_mod.build(
             home,

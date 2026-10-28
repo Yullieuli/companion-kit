@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any
 
@@ -18,6 +19,12 @@ from . import clock, cost, events, initiative, mood as mood_mod, quota as quota_
 from .store import Home
 
 SPEAKING = ("speak", "voice", "sing", "share")
+
+# 时钟只能有一个主人：DSH 每 5 分钟 tick、hermes 每 15 分钟 tick，
+# 都从同一本额度里扣，结果是谁先 tick 谁把额度吃掉。
+# 锁 30 分钟内有效：主人正常心跳（≤15 分钟）不会过期，换了宿主也能接管。
+OWNER = "logs/tick_owner.json"
+OWNER_TTL = 1800
 
 
 def _owner_last_seen(home: Home) -> float | None:
@@ -39,9 +46,24 @@ def _pending_life(home: Home) -> int:
     return len(life_mod.unshared(home))
 
 
+def _claim(home: Home, host: str, now: datetime) -> tuple[bool, str]:
+    """尝试成为时钟主人。返回 (是否拿到, 当前主人)。"""
+    try:
+        cur = json.loads((home.root / OWNER).read_text(encoding="utf-8"))
+    except Exception:
+        cur = {}
+    owner = str(cur.get("host") or "")
+    age = now.timestamp() - float(cur.get("at") or 0)
+    if owner and owner != host and age < OWNER_TTL:
+        return False, owner
+    home.save_json(OWNER, {"host": host, "at": now.timestamp()})
+    return True, host
+
+
 def tick(
     home: Home,
     *,
+    host: str = "cli",
     now: datetime | None = None,
     rnd: Any | None = None,
     quota_cfg: dict[str, Any] | None = None,
@@ -54,6 +76,16 @@ def tick(
 ) -> dict[str, Any]:
     now = now or datetime.now()
     home.init()
+
+    ok, owner = _claim(home, host, now)
+    if not ok:
+        return {
+            "action": "silent", "score": 0.0,
+            "why": f"时钟由 {owner} 掌管，这边只看不插手",
+            "cost": 0.0, "blocked": "host", "candidates": [],
+            "event": None, "spent_today": round(cost.today_total(home, now), 4),
+            "remaining_cny": 0.0, "in_sleep": False, "in_window": False, "host": host,
+        }
 
     rhythm = home.rhythm()
     m = mood_mod.decay(home.mood(), now)
@@ -123,4 +155,5 @@ def tick(
         "remaining_cny": round(remaining, 4),
         "in_sleep": clock.in_sleep(rhythm, now),
         "in_window": clock.in_window(rhythm, now),
+        "host": host,
     }

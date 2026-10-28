@@ -108,5 +108,23 @@ class TickTest(unittest.TestCase):
         self.assertLess(axes, 30)  # 衰减被写回去了
 
 
+    def test_second_host_cannot_steal_the_clock(self):
+        """两个宿主共用一个 store：谁先 tick 谁当主人，另一个只读。"""
+        from companion import drive
+        first = drive.tick(self.home, host="hermes", now=T0)
+        self.assertEqual(first.get("host"), "hermes")
+        second = drive.tick(self.home, host="dsh", now=T0 + timedelta(minutes=1))
+        self.assertEqual(second["action"], "silent")
+        self.assertEqual(second.get("blocked"), "host")
+        self.assertIn("hermes", second["why"])
+
+    def test_owner_expires_so_another_host_can_take_over(self):
+        from companion import drive
+        drive.tick(self.home, host="hermes", now=T0)
+        later = drive.tick(self.home, host="dsh", now=T0 + timedelta(minutes=31))
+        self.assertNotEqual(later.get("blocked"), "host")
+        self.assertEqual(later.get("host"), "dsh")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

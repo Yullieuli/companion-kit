@@ -55,6 +55,7 @@ def cmd_context(home: Home, args) -> int:
     ctx = context_mod.build(
         home,
         budget=args.budget,
+        include_soul=not args.no_soul,
         memory_text=memory.render(home, args.query or ""),
         opinion_text=opinion.render(home, args.query or ""),
         person_text=people.render(home, people.OWNER),
@@ -68,7 +69,7 @@ def cmd_context(home: Home, args) -> int:
 
 
 def cmd_tick(home: Home, args) -> int:
-    result = drive.tick(home, now=datetime.now(), emit_silent=args.emit_silent)
+    result = drive.tick(home, host=args.host, now=datetime.now(), emit_silent=args.emit_silent)
     if args.json:
         _dump(result, True)
     else:
@@ -441,9 +442,11 @@ def build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("context", help="打印本轮注入上下文")
     c.add_argument("--budget", type=int, default=2000)
     c.add_argument("--query", help="按话题挑记忆（不给就取最近的）")
+    c.add_argument("--no-soul", action="store_true", help="不注入人格块（宿主自己有人格时用）")
 
     t = sub.add_parser("tick", help="问一次该干什么")
     t.add_argument("--emit-silent", action="store_true")
+    t.add_argument("--host", default="cli", help="谁在掌管时钟（多宿主共用一个 store 时用）")
 
     e = sub.add_parser("events", help="读事件")
     e.add_argument("--since", type=int, default=None)
