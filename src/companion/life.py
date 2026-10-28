@@ -81,6 +81,31 @@ def unshared(home: Home, *, days: float = 2) -> list[dict[str, Any]]:
     return [r for r in recent(home, days=days, limit=30) if not r.get("shared")]
 
 
+def update(home: Home, row_id: str, **patch: Any) -> dict[str, Any]:
+    """改一条已有的记录。
+
+    为什么需要它：她刷完 B 站先落一条（标题级的"我看了"），
+    读完才补上自己的感受。要是再 append 一行，生活流水就会变成两条，
+    而 `unshared` 会把同一件事算两遍，于是她又会重复讲。
+    """
+    rows = home.read_jsonl(FILE, limit=100000)
+    target: dict[str, Any] | None = None
+    for r in rows:
+        if str(r.get("id")) == str(row_id):
+            target = r
+            break
+    if target is None:
+        return {}
+    for k, v in patch.items():
+        if k in ("id", "at", "epoch"):
+            continue
+        target[k] = v
+    p = home.root / FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    return target
+
+
 def mark_shared(home: Home, ids: list[str]) -> int:
     """把若干条标成"已经跟他讲过了"。整文件重写 —— 量在千行内，简单比高效重要。"""
     if not ids:

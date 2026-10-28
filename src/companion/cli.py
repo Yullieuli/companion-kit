@@ -352,6 +352,50 @@ def cmd_voice(home: Home, args) -> int:
     return 0 if out.get("ok") else 1
 
 
+def cmd_bili(home: Home, args) -> int:
+    """刷 B 站。注意：`tick` 会真的发请求、写生活流水 —— 不是 dry-run。"""
+    from . import bili
+
+    frames = None
+    if getattr(args, "frames", False):
+        frames = True
+    if getattr(args, "no_frames", False):
+        frames = False
+
+    if args.action == "status":
+        out = {**bili.status(home), "config": bili.config(home)}
+    elif args.action == "config":
+        out = bili.config(home)
+    elif args.action == "me":
+        from .bilinet import Net
+
+        try:
+            net = Net(home.root)
+            out = {**net.me(), "cred": net.cred().get("path", ""),
+                   "traffic": net.traffic(), "paused_sec": net.paused_for()}
+        except Exception as e:
+            out = {"ok": False, "why": f"{type(e).__name__}: {e}"}
+    elif args.action == "tick":
+        out = bili.tick(home, frames=frames, force=args.force)
+    elif args.action == "debrief":
+        from .bilinet import Net
+
+        out = bili.debrief(home, args.bvid, net=Net(home.root), frames=frames)
+    elif args.action == "commit":
+        out = bili.commit(home, args.bvid, summary=args.summary, rating=args.rating)
+    elif args.action == "share":
+        from .bilinet import Net
+
+        net = Net(home.root) if (args.via == "dm" or args.to_mid) else None
+        out = bili.share(home, args.bvid, args.summary, score_v=args.score, reason=args.reason,
+                         to_mid=args.to_mid or None, via=args.via, net=net)
+    else:  # pragma: no cover - argparse 已经限定了
+        out = {"ok": False, "why": f"不认识的动作 {args.action}"}
+
+    _dump(out if args.json else json.dumps(out, ensure_ascii=False, indent=2), args.json)
+    return 0 if (not isinstance(out, dict) or out.get("ok", True) is not False) else 1
+
+
 def cmd_doctor(home: Home, args) -> int:
     """体检：版本、路径、模块能不能导入、外部工具在不在、以及给杀软的白名单建议。"""
     import importlib
@@ -364,6 +408,7 @@ def cmd_doctor(home: Home, args) -> int:
         ("device", "手（闸 + 分发）"), ("devwin", "桌面截图/输入（ctypes）"),
         ("devcdp", "浏览器 CDP（socket）"), ("imgpng", "PNG 编码"),
         ("voice", "语音"), ("mcp", "MCP 服务"),
+        ("bilinet", "B 站传输（WBI/节流/熔断）"), ("bili", "刷 B 站（挑/读/分享）"),
     ]
     checks: list[dict[str, Any]] = []
     for name, desc in mods:
@@ -552,6 +597,20 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--public", action="store_true", help="模拟公开发布（会被拒）")
     v.add_argument("--limit", type=int, default=5)
 
+    bl = sub.add_parser("bili", help="刷 B 站：挑片 / 深读 / 分享")
+    bl.add_argument("action", choices=["status", "config", "me", "tick", "debrief", "commit", "share"])
+    bl.add_argument("bvid", nargs="?", default="")
+    bl.add_argument("--summary", default="", help="她的感受（commit）/ 分享的话（share）")
+    bl.add_argument("--rating", type=int, help="0-10，她自己给的分")
+    bl.add_argument("--score", type=int, default=0, help="分享闸要的评分")
+    bl.add_argument("--reason", default="", help="分享闸要的理由")
+    bl.add_argument("--to-mid", dest="to_mid", type=int, default=0, help="主人的 B 站 mid（私信）")
+    bl.add_argument("--via", default="", help="qq / dm；空 = 用配置")
+    bl.add_argument("--frames", action="store_true", help="强制抽九宫格")
+    bl.add_argument("--no-frames", action="store_true", help="不抽帧")
+    bl.add_argument("--force", action="store_true", help="绕过每日额度与间隔")
+    bl.add_argument("--json", action="store_true")
+
     sub.add_parser("doctor", help="体检：模块/外部工具/杀软误报位置")
 
     mc = sub.add_parser("mcp", help="MCP 服务（stdio）")
@@ -581,6 +640,7 @@ def main(argv: list[str] | None = None) -> int:
         "fence": cmd_fence,
         "sticker": cmd_sticker,
         "voice": cmd_voice,
+        "bili": cmd_bili,
         "mcp": cmd_mcp,
         "doctor": cmd_doctor,
     }

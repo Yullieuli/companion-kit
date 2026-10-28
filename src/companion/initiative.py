@@ -24,6 +24,7 @@ COST_EST = {
     "voice": 0.030,
     "sing": 0.050,
     "share": 0.035,
+    "bili": 0.012,   # 只读一条：一次短会话。刷本身不花 token
     "diary": 0.008,
     "silent": 0.0,
 }
@@ -43,6 +44,8 @@ class Situation:
     days_since_voice: float = 99.0
     remaining_cny: float = 99.0      # 今天还剩多少预算
     owner_waiting: bool = False      # 主人刚说完话，等她接
+    bili_due: bool = False           # B 站那边还有额度、也隔够久了
+    bili_why: str = ""               # 不 due 的原因（写进日志，方便回看）
 
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -125,6 +128,23 @@ def _candidates(s: Situation) -> list[Candidate]:
     why = f"有 {s.pending_share} 条看完了觉得他会喜欢" if s.pending_share else ""
     out.append(Candidate("share", score, why or "没什么非分享不可的", COST_EST["share"]))
 
+    # 刷 B 站：这是「过日子」，不是任务。所以只在额度够、隔够久时才有分；
+    # 不然她会整天刷视频，别的事一件不做（第一次接上时就是这样）。
+    score = 0.10
+    why = []
+    if s.bili_due:
+        score += 0.42
+        why.append("想看点什么")
+        if energy >= 20:
+            score += 0.08
+            why.append("还有精神")
+        if low:
+            score -= 0.20
+            why.append("心情低，刷不动")
+    else:
+        why.append(s.bili_why or "刚看过，先不刷")
+    out.append(Candidate("bili", score, "、".join(why), COST_EST["bili"]))
+
     # 写日记：不打扰任何人，任何时候都允许
     score = 0.28 + (0.10 if s.pending_life else 0)
     out.append(Candidate("diary", score, "有些事想自己记下来", COST_EST["diary"]))
@@ -148,9 +168,15 @@ def decide(s: Situation, rnd: Any | None = None) -> dict[str, Any]:
     allowed, why_not = quota_mod.allow(
         s.quota_state, s.quota_cfg, now, s.owner_last_seen
     )
+    cands_all = _candidates(s)
     if not allowed:
-        # 不能对他说话，但可以自己记一笔 —— 这也是"过日子"
-        return _single("diary", why_not, "quota")
+        # 说话额度用完了，但日子还得过：写日记、刷会儿视频都不打扰他。
+        # 这两件也不占说话额度，所以留着不算违规。
+        quiet = [c for c in cands_all if c.action in ("bili", "diary", "silent")]
+        best_quiet = max(quiet, key=lambda c: c.score)
+        if best_quiet.action == "silent" or best_quiet.score <= 0.35:
+            return _single("diary", why_not, "quota")
+        cands_all = quiet
 
     # 30% 概率今天就是不想动（真实的惰性，不是 bug）
     skip_chance = float((s.rhythm or {}).get("skip_chance", 0.30))
@@ -158,8 +184,7 @@ def decide(s: Situation, rnd: Any | None = None) -> dict[str, Any]:
         return _single("silent", "今天不太想动", "dice")
 
     # ── 打分 + 挑一个 ───────────────────────────────────────
-    all_cands = _candidates(s)
-    cands = [c for c in all_cands if c.cost <= s.remaining_cny or c.cost == 0]
+    cands = [c for c in cands_all if c.cost <= s.remaining_cny or c.cost == 0]
     if not any(c.action != "silent" for c in cands):
         return _single("silent", "今天的预算用完了，先不花", "budget")
     best = max(cands, key=lambda c: (c.score, -c.cost))

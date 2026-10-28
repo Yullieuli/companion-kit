@@ -108,10 +108,14 @@ companion fence "外部文本" --source 群聊   # 打注围栏：命中几处�
 companion group judge "这游戏真好玩"      # 群聊三档：reply / lurk / ignore
 companion sticker add ./图.png --mood 无语 --tags 翻白眼
 companion sticker pick --mood 无语        # 没合适的就返回空，不凑合
-companion mcp --list                    # 列出 24 个 MCP 工具
+companion bili status                   # 今天刷了几条、还能不能刷
+companion bili tick                     # 自己挑一条、读完、记进生活流水
+companion bili commit BV1xx411c7mD --summary "关卡设计讲透了" --rating 8
+companion bili share BV1xx411c7mD --score 15 --reason "他肯定喜欢这个战斗系统"
+companion mcp --list                    # 列出 25 个 MCP 工具
 ```
 
-**158 个单测**，全部离线可跑。
+**193 个单测**，全部离线可跑（B 站那几个用假总线，不碰网络）。
 
 | 层 | 做了什么 |
 |---|---|

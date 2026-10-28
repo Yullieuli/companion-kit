@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from . import context as context_mod
-from . import cost, device, drive, events, fence, group, life, memory, mood as mood_mod, opinion, people, react as react_mod, sticker, voice
+from . import bili, cost, device, drive, events, fence, group, life, memory, mood as mood_mod, opinion, people, react as react_mod, sticker, voice
 from .store import Home
 
 PROTOCOL = "2024-11-05"
@@ -105,6 +105,16 @@ TOOLS: list[Tool] = [
     _schema("companion_cost", "今天花了多少 / 预算还剩多少。"),
     _schema("companion_voice", "合成一段语音（本地 TTS），返回文件路径。sing=true 是降级版「唱」。",
             {"text": {"type": "string"}, "sing": {"type": "boolean", "default": False}}, ["text"]),
+    _schema("companion_bili",
+            "刷 B 站：tick=挑一条并读完（返回素材，不返回长文案）/ debrief=只读某条 / "
+            "commit=回填她自己的感受 / share=分享给主人 / status=今天刷了几条、还能不能刷。",
+            {"action": {"type": "string",
+                        "enum": ["tick", "debrief", "commit", "share", "status"], "default": "status"},
+             "bvid": {"type": "string"}, "summary": {"type": "string"},
+             "rating": {"type": "integer"}, "score": {"type": "integer"},
+             "reason": {"type": "string"}, "to_mid": {"type": "integer"},
+             "via": {"type": "string"}, "frames": {"type": "boolean"},
+             "force": {"type": "boolean"}}, []),
     _schema("device_look", "看屏幕：截图并返回路径与前台窗口。target 选 phone/desktop/browser/game。",
             {"target": {"type": "string", "enum": ["phone", "desktop", "browser", "game"], "default": "desktop"}}),
     _schema("device_act", "在屏幕上做一个动作（点/滑/打字），返回执行后的截图。危险动作会被拒。",
@@ -304,6 +314,30 @@ def _t_voice(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     return r
 
 
+def _t_bili(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    action = a.get("action") or "status"
+    if action == "status":
+        return {"ok": True, **bili.status(home)}
+    if action == "tick":
+        return bili.tick(home, frames=a.get("frames"), force=bool(a.get("force")))
+    if action == "debrief":
+        from .bilinet import Net
+
+        return {"ok": True, **bili.debrief(home, a["bvid"], net=Net(home.root), frames=a.get("frames"))}
+    if action == "commit":
+        return bili.commit(home, a["bvid"], summary=a.get("summary") or "",
+                           rating=a.get("rating"))
+    if action == "share":
+        from .bilinet import Net
+
+        via = a.get("via") or ""
+        net = Net(home.root) if (via == "dm" or a.get("to_mid")) else None
+        return bili.share(home, a["bvid"], a.get("summary") or "",
+                          score_v=int(a.get("score") or 0), reason=a.get("reason") or "",
+                          to_mid=a.get("to_mid"), via=via, net=net)
+    return {"ok": False, "why": f"不认识的动作 {action}"}
+
+
 def _t_look(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     return device.look(home, a.get("target") or "desktop")
 
@@ -339,6 +373,7 @@ HANDLERS: dict[str, Callable[[Home, dict[str, Any]], dict[str, Any]]] = {
     "companion_person": _t_person,
     "companion_cost": _t_cost,
     "companion_voice": _t_voice,
+    "companion_bili": _t_bili,
     "device_look": _t_look,
     "device_act": _t_act,
     "device_open": _t_open,

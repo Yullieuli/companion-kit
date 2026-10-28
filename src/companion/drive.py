@@ -19,6 +19,9 @@ from . import clock, cost, events, initiative, mood as mood_mod, quota as quota_
 from .store import Home
 
 SPEAKING = ("speak", "voice", "sing", "share")
+# 不占"说话额度"的动作：刷 B 站是过日子，不是找他说话。
+# 但它照样花预算（一次短会话），所以预算闸对它一样生效。
+DOING = ("bili",)
 
 # 时钟只能有一个主人：DSH 每 5 分钟 tick、hermes 每 15 分钟 tick，
 # 都从同一本额度里扣，结果是谁先 tick 谁把额度吃掉。
@@ -44,6 +47,21 @@ def _pending_life(home: Home) -> int:
     from . import life as life_mod
 
     return len(life_mod.unshared(home))
+
+
+def _bili_state(home: Home, now: datetime) -> tuple[bool, str, int]:
+    """B 站那边现在什么情况：(还有额度吗, 为什么没有, 有几条读完没分享)。
+
+    读不到就当"不能刷"——适配层坏掉时她确实什么都做不了，
+    但不该连累说话、唱歌这些只在本地的事。
+    """
+    from . import bili as bili_mod
+
+    try:
+        d = bili_mod.due(home, now=now)
+        return bool(d.get("due")), str(d.get("why") or ""), bili_mod.pending_share(home)
+    except Exception as e:  # pragma: no cover - 配置坏了才会走到
+        return False, f"B站不可用：{type(e).__name__}", 0
 
 
 def _claim(home: Home, host: str, now: datetime) -> tuple[bool, str]:
@@ -93,6 +111,7 @@ def tick(
     spent = cost.today_total(home, now)
     b = {**cost.DEFAULT_BUDGET, **(budget or {})}
     remaining = max(0.0, float(b["daily_cny"]) - spent)
+    bili_ok, bili_why, bili_pending = _bili_state(home, now)
 
     situation = initiative.Situation(
         now=now,
@@ -102,11 +121,13 @@ def tick(
         quota_cfg=quota_cfg,
         owner_last_seen=_owner_last_seen(home),
         pending_life=_pending_life(home),
-        pending_share=pending_share,
+        pending_share=pending_share or bili_pending,
         days_since_sing=days_since_sing,
         days_since_voice=days_since_voice,
         remaining_cny=remaining,
         owner_waiting=owner_waiting,
+        bili_due=bili_ok,
+        bili_why=bili_why,
     )
     decision = initiative.decide(situation, rnd)
 
@@ -123,6 +144,16 @@ def tick(
             est_cost=decision["cost"],
             mood=m.get("label"),
             quota=f"{int(q2.get('count', 0))}/{cap}",
+            window="in" if clock.in_window(rhythm, now) else "out",
+        )
+    elif decision["action"] in DOING:
+        # 「去刷会儿」——不扣说话额度，但要让人知道她现在想干什么
+        event = events.emit(
+            home, "bili_due", now,
+            action=decision["action"],
+            reason=decision["why"],
+            est_cost=decision["cost"],
+            mood=m.get("label"),
             window="in" if clock.in_window(rhythm, now) else "out",
         )
     elif emit_silent:

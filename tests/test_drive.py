@@ -78,7 +78,8 @@ class TickTest(unittest.TestCase):
     def test_second_tick_within_gap_is_blocked(self):
         drive.tick(self.home, now=T0, pending_share=2)
         r = drive.tick(self.home, now=T0 + timedelta(minutes=5), pending_share=2)
-        self.assertEqual(r["action"], "diary")
+        # 额度用完了就只是「不能找他说话」：可以写日记、可以自己刷会儿视频
+        self.assertNotIn(r["action"], ("speak", "voice", "sing", "share"))
         self.assertEqual(self.home.quota()["count"], 1)
 
     def test_budget_exhausted_blocks_speaking(self):

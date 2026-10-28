@@ -84,7 +84,10 @@ _REQUIRED = {
     "logs/said.jsonl": "",
     "logs/voice.jsonl": "",
     "logs/device.jsonl": "",
+    "logs/bili.jsonl": "",
     "life/life.jsonl": "",
+    "bili/state.json": "{}",
+    "bili/config.json": "{}",
 }
 
 
@@ -103,7 +106,7 @@ class Home:
     def init(self) -> list[str]:
         """建目录与缺的模板。返回这次真正创建的文件（相对路径）。"""
         created: list[str] = []
-        for d in ("memory/pages", "people", "life", "logs", "mood", "voice", "shots", "stickers", "group"):
+        for d in ("memory/pages", "people", "life", "logs", "mood", "voice", "shots", "stickers", "group", "bili"):
             (self.root / d).mkdir(parents=True, exist_ok=True)
         for rel, body in _REQUIRED.items():
             p = self.root / rel

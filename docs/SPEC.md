@@ -1,6 +1,6 @@
 # 规格：companion-kit（跨 agent 的伴侣运行时）
 
-> 状态：**实施中**（0.2.0）。逐项完成情况见 §12。
+> 状态：**实施中**（0.3.0）。逐项完成情况见 §12。
 > 目标读者：未来的我、以及任何要接手这套东西的人。
 
 ## 1. 一句话
@@ -69,7 +69,7 @@
 | `companion_mood` | 读/调心情（跨频道共享） | `action=get\|nudge` |
 | `companion_card` | 人物卡查询/更新 | `user_id`, `favor_delta`, `tags` |
 | `companion_wake` | 问"我现在该主动说话吗"，返回理由或 `[SILENT]` | `channel`, `now` |
-| `companion_bili` | 刷片/深读/分享（复用 bili-whale 逻辑） | `action=tick\|debrief\|share` |
+| `companion_bili` | 刷片/深读/回填/分享（0.3.0 已实现） | `action=tick\|debrief\|commit\|share\|status` |
 
 设计原则：**工具返回的是"数据 + 一句为什么"**，不是长文案；让模型自己组织语言。
 
@@ -118,7 +118,13 @@ $COMPANION_HOME/                     # 默认 ~/.companion
 ├── life/<yymmdd>/events.json       # 生活事件（外部引擎可写）
 ├── opinions.jsonl          # 观点（她自己的判断）
 ├── quota.json              # 主动次数、衰减、冷却
-└── logs/turns.jsonl        # 每轮：注入了什么、花了多少、她说了什么
+├── bili/
+│   ├── config.json         # 刷片开关/额度/口味词
+│   ├── state.json          # 今天刷了几条、最近给过哪些
+│   ├── traffic.json        # 读/写额度与风控冷静期
+│   └── credential.json     # B 站 cookie（只在本机，不进仓库）
+├── shots/bili/{covers,frames}/  # 封面与九宫格抽帧
+└── logs/{turns,cost,bili}.jsonl # 每轮花了多少、B 站每次干了什么
 ```
 
 ### 5.5 设备控制（手）
@@ -315,22 +321,22 @@ MCP 工具（三个，不拆细）：
 | 节 | 状态 | 说明 |
 |---|---|---|
 | §4 三层架构 | 🟡 | core 无宿主依赖、无网络；契约层 ①MCP ✅ ②Context(CLI) ✅ ③事件(CLI 长轮询) ✅ ④文件协议 ✅；**HTTP 形态未做** |
-| §5.1 MCP 工具 | 🟡 | 规格 8 个：context / life / card / wake / say 已覆盖，`react` ✅、`mood` ✅、**`bili` ❌**；实现对外是 24 个更细的工具 |
+| §5.1 MCP 工具 | ✅ | 规格 8 个全部覆盖（context / life / card / wake / say / react / mood / bili）；对外 25 个工具 |
 | §5.2 Context 注入 | 🟡 | 五块（+ 观点共六块）、优先级、预算、块 hash 都在；**投影去重（`context.Cache`）尚无宿主调用** |
 | §5.3 事件订阅 | 🟡 | append-only + cursor + 长轮询 ✅；`wake_due` / `spend_guard` / `mood_shift` 都会发；**HTTP `/events` ❌** |
-| §5.4 文件协议 | 🟡 | 结构与规格有两处偏差：`people/*.json`（规格为 `.md`）、`life/life.jsonl`（规格为按日目录）。`opinions.jsonl` ✅ 已由 `opinion.py` 读写 |
+| §5.4 文件协议 | 🟡 | 结构与规格有两处偏差：`people/*.json`（规格为 `.md`）、`life/life.jsonl`（规格为按日目录）。`opinions.jsonl` ✅、`bili/*`（配置/状态/额度/凭证）✅ |
 | §5.5 设备控制 | 🟡 | 四类目标 + Screen/Input 双 port ✅，五道闸 ✅；**缺** `swipe`/`key`（桌面与浏览器）、`App.list/focus`、`Observe(ocr/describe)`、游戏的窗口捕获与坐标映射；`device_act` 只回执行后一张图 |
 | §5.6 语音 | 🟡 | TTS ✅、唱歌降级版 ✅、边界闸 ✅；SVC ❌（明确 P3） |
 | §5.7 成本 | 🟡 | 前缀分层 / 事件门 / 本地先做 / 预算闸 ✅；块级去重未接线、分级模型只有价格表无任务映射 |
-| §5.8 自主性 | 🟡 | 六候选 + 硬闸 + 便宜优先 ✅；`react` 补齐了写回；**缺**"刷 B 站"动作、`ask` 流程、改记忆的 never 闸 |
+| §5.8 自主性 | 🟡 | 七候选（含刷 B 站）+ 硬闸 + 便宜优先 ✅；说话额度用尽时仍可日记/刷片；**缺** `ask` 流程、改记忆的 never 闸 |
 | §8 安全 | 🟡 | 主人识别（设备侧）✅、频率闸 ✅、静默衰减 ✅；**注入围栏 ✅（0.2.0 新增）**、身份锁 🟡、同话题 10 分钟不追问 ❌ |
 | §9 测试 | 🟡 | 158 个纯逻辑单测 ✅、MCP 冒烟 ✅；**契约测试（三 adapter 逐字节一致）❌、回放测试 ❌** |
-| §10 里程碑 | 🟡 | M0/M1/M3/M4 ✅；M2 🟡（dsh 已通、hermes adapter 未做）；M5 ❌；M6 🟡（MCP ✅） |
+| §10 里程碑 | 🟡 | M0/M1/M3/M4 ✅；M2 ✅（hermes/dsh 两宿主已验证）；M5 ✅（引擎与 CLI/MCP 已通，旧 bili 插件尚未下线）；M6 🟡（MCP ✅） |
 
 ### 剩余工作的优先级
 
-1. **hermes adapter**（M2 验收点：她在真实 QQ 里按新时钟说话）
-2. **B 站迁入**（M5，含 `companion_bili`）
-3. **契约测试 + 回放测试**（§9，跨宿主一致性的唯一硬保证）
-4. 设备补齐：swipe/key、窗口捕获、坐标映射、Observe
-5. 分级模型的任务→模型映射；`ask` 流程
+1. **旧 bili-whale 插件下线**（M5 最后一步：cron 换成 `companion_bili.sh`，两边同时跑会重复刷）
+2. **契约测试 + 回放测试**（§9，跨宿主一致性的唯一硬保证）
+3. 设备补齐：swipe/key、窗口捕获、坐标映射、Observe
+4. 分级模型的任务→模型映射；`ask` 流程
+5. `people/*.json` → `.md`、`life` 按日目录（§5.4 的两处偏差）
