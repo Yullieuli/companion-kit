@@ -15,6 +15,7 @@
 #   -Python <path>   指定解释器             COMPANION_PYTHON
 #   -NoDsh           不自动注册 DSH         COMPANION_NO_DSH=1
 #   -NoEnv           不改 PATH/环境变量      COMPANION_NO_ENV=1
+#   -From <dir>      从本地目录装（开发/未发布时用）  COMPANION_FROM
 #   -DryRun          只打印，不改任何东西
 #
 # 说明：这里刻意不用 param() —— `irm ... | iex` 下 param 不是合法语句。
@@ -36,13 +37,16 @@ for ($i = 0; $i -lt $args.Count; $i++) {
 
 $Store  = if ($Opt["Store"])  { $Opt["Store"] }  elseif ($env:COMPANION_HOME) { $env:COMPANION_HOME } else { "$env:USERPROFILE\.companion" }
 $Python = if ($Opt["Python"]) { $Opt["Python"] } elseif ($env:COMPANION_PYTHON) { $env:COMPANION_PYTHON } else { "" }
+$From   = if ($Opt["From"]) { $Opt["From"] } elseif ($env:COMPANION_FROM) { $env:COMPANION_FROM } else { "" }
 $NoDsh  = [bool]($Opt["NoDsh"] -or ($env:COMPANION_NO_DSH -eq "1"))
 $NoEnv  = [bool]($Opt["NoEnv"] -or ($env:COMPANION_NO_ENV -eq "1"))
 $DryRun = [bool]$Opt["DryRun"]
 
 $Repo   = "https://github.com/Yullieuli/companion-kit"
-$Ver    = "v0.2.3"
-$Wheel  = "$Repo/releases/download/$Ver/companion_kit-0.2.3-py3-none-any.whl"
+# 版本只有这一处；旧版这里写死了 v0.2.3，装完用户拿到的是半年前的包。
+$Ver    = if ($env:COMPANION_VERSION) { "v" + $env:COMPANION_VERSION } else { "v0.9.2" }
+$VerNum = $Ver.TrimStart("v")
+$Wheel  = if ($env:COMPANION_WHEEL) { $env:COMPANION_WHEEL } else { "$Repo/releases/download/$Ver/companion_kit-$VerNum-py3-none-any.whl" }
 $Root   = Join-Path $env:LOCALAPPDATA "companion"
 $Bin    = Join-Path $Root "bin"
 $Venv   = Join-Path $Store "venv"
@@ -140,7 +144,15 @@ function Pip-Install([string[]]$targets) {
   return $ok
 }
 
-if ($DryRun) {
+if ($From) {
+  # 本地/源码安装需要 setuptools 做构建；Python 3.12 起 venv 默认不带它。
+  if ($DryRun) {
+    Say "[dry] pip install setuptools wheel; pip install -e $From"
+  } else {
+    $null = & $VenvPy -m pip install -q --upgrade setuptools wheel 2>&1
+    if (-not (Pip-Install @("-e", $From))) { throw "本地安装失败：$From" }
+  }
+} elseif ($DryRun) {
   Say "[dry] pip install $Wheel"
 } else {
   if (-not (Pip-Install @($Wheel))) {

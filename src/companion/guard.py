@@ -137,10 +137,14 @@ def say(home: Home, text: str, *, channel: str = "", owner_last_seen: float | No
     if dry_run:
         return {"ok": True, "dry_run": True, "text": text, "quota": home.quota()}
 
-    st = quota_mod.record(home.quota(), now, "speak")
+    # 先看有没有"已经付过钱"的票（drive 决策时扣的那次）。
+    # 有票就免单，但仍然要把话记下来 —— 否则她说过什么就查不到了。
+    st, reserved = quota_mod.take_pending(home.quota(), now, action="speak")
+    if not reserved:
+        st = quota_mod.record(st, now, "speak")
     home.save_json("quota.json", st)
     home.append_jsonl("logs/said.jsonl", {
         "at": now.isoformat(timespec="seconds"), "text": text,
-        "channel": channel, "source": "say",
+        "channel": channel, "source": "say", "reserved": reserved,
     })
-    return {"ok": True, "text": text, "quota": st}
+    return {"ok": True, "text": text, "quota": st, "reserved": reserved}

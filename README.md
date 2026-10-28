@@ -49,7 +49,12 @@ curl -fsSL https://raw.githubusercontent.com/Yullieuli/companion-kit/main/instal
 | 装包 | 直接装 GitHub Release 的 `.whl`，**不需要 git**（失败才回退 `git+`） |
 | 初始化 | 自动 `companion init`，建好 SOUL / 记忆 / 作息 / 心情 |
 | PATH | Windows 写用户环境变量，Linux/macOS 写 shell 配置，**不用你 export** |
-| DSH | 检测到 `dsh` 就顺手 `dsh plugin add` |
+| DSH | 检测到 `dsh` 就顺手 `dsh plugin add`（DSH 侧只接 tick/事件/注入，见下） |
+
+> **发布状态**：一行安装依赖 GitHub 上已经推送的 `main` 和对应版本的 Release。
+> 如果这条命令 404（仓库还没发布），用本地安装：
+> `bash install.sh --from /path/to/companion-kit`（Windows 用 `install.ps1 -From .`）。
+> 安装脚本的版本号与 `companion.__version__` 由测试守着，不会再出现"脚本装旧包"。
 
 调试用两个环境变量：
 
@@ -128,10 +133,10 @@ companion bili status                   # 今天刷了几条、还能不能刷
 companion bili tick                     # 自己挑一条、读完、记进生活流水
 companion bili commit BV1xx411c7mD --summary "关卡设计讲透了" --rating 8
 companion bili share BV1xx411c7mD --score 15 --reason "他肯定喜欢这个战斗系统"
-companion mcp --list                    # 列出 25 个 MCP 工具
+companion mcp --list                    # 列出 26 个 MCP 工具
 ```
 
-**328 个单测**，全部离线可跑（B 站用假总线，不碰网络）。其中 9 个是契约/回放：
+**345 个单测**，全部离线可跑（B 站用假总线，不碰网络）。其中 9 个是契约/回放：
 CLI、MCP、直接调用三方拼出的上下文必须逐字节一致，真实一轮的注入能按当时的时钟重建。
 
 | 层 | 做了什么 |
@@ -146,9 +151,24 @@ CLI、MCP、直接调用三方拼出的上下文必须逐字节一致，真实�
 | **围栏**（§8） | 外部文本打标 + 消毒 + **记忆投毒防线**：被弹幕骗着写下的"事实"会在写入时被滤掉并留痕 |
 | **群聊**（M4） | 三档 reply/lurk/ignore：被点名必回、冷却潜水、一小时上限、连续潜水转无视 |
 | **表情**（M4） | 按情绪目录 + 标签挑，最近发过的降权，没有对得上的**就不发** |
-| **MCP**（M6） | 15 个工具，stdio JSON-RPC；codex / openclaw / 任何 MCP 客户端可直接挂 |
+| **MCP**（M6） | 26 个工具，stdio JSON-RPC（强制 UTF-8）；codex / openclaw / 任何 MCP 客户端可直接挂 |
 
-**还没做的**：B 站接入（M5）、hermes adapter、真 SVC 唱歌（要她自己的音色模型）。
+**验证到哪一步了**：见 [docs/VERIFY.md](docs/VERIFY.md)（哪些实测通过、哪些只做了一半、哪些还没验）。
+
+**还没做的**：真 SVC 唱歌（要她自己的音色模型 + 显存）。B 站、hermes 已接完。
+
+### 平台与前置条件（实测边界）
+
+| 环境 | 核心 / MCP / HTTP | 桌面截图与输入 | 手机(adb) | 浏览器(CDP) | 语音 | OCR |
+|---|---|---|---|---|---|---|
+| Windows | ✅ | ✅ GDI + SendInput | ✅ 装 platform-tools | ✅ 需 Chrome 开 `--remote-debugging-port=9222` | ✅ SAPI / edge-tts | ✅ 装 tesseract |
+| WSL | ✅ | ⚠️ 默认不支持；配 `devices.json: windows.python/src` 后转发到 Windows 执行 | ✅ | ✅（Windows 侧 Chrome） | ⚠️ espeak / edge-tts 可用 | ✅ tesseract |
+| Linux | ✅ | ❌（X11/Wayland 未实现） | ✅ | ✅ | ✅ espeak / edge-tts | ✅ tesseract |
+| macOS | ✅ | ❌（未实现） | ✅ | ✅ | ✅ `say` / edge-tts | ✅ 装 tesseract |
+| Docker | ✅ | ❌（无显示） | ❌（需映射 USB/网络 adb） | ❌（需能连宿主 Chrome） | ❌（镜像内无 TTS） | ✅ 装 tesseract |
+
+> 桌面这块不是"应该能跑"——Win32 API 只有 Windows 有，别的系统调用会抛 `DesktopError`。
+> `companion doctor` 会在非 Windows 上直接标出来，不会给一个假的 ✓。
 
 ## 接成 MCP（codex / openclaw / 任意客户端）
 
@@ -163,6 +183,10 @@ CLI、MCP、直接调用三方拼出的上下文必须逐字节一致，真实�
 }
 ```
 
+> Windows 上如果客户端找不到 `command`（GUI 进程不继承新写的 PATH），把 `command` 换成
+> 绝对路径：`C:\Users\<你>\.companion\venv\Scripts\companion.exe`。
+> codex / openclaw 都支持绝对路径，这比改系统 PATH 可靠。
+
 工具面分三类：
 
 | 类 | 工具 |
@@ -171,7 +195,8 @@ CLI、MCP、直接调用三方拼出的上下文必须逐字节一致，真实�
 | 记 | `companion_memory_write` `companion_memory_search` `companion_life_record` `companion_life_mark_shared` `companion_person` |
 | 写 | `companion_react` `companion_opinion` `companion_mood` `companion_fence` |
 | 聊 | `companion_group_judge` `companion_group_note` `companion_sticker_pick` `companion_sticker_add` `companion_sticker_stats` |
-| 做 | `companion_say` `companion_voice` `device_look` `device_act` `device_open` |
+| 做 | `companion_say` `companion_voice` `device_look` `device_act` `device_open` `companion_ask` |
+| 刷 | `companion_bili`（status / tick / commit / share） |
 
 调用顺序约定：每轮开头 `companion_context` → 干活 → `companion_life_record` 记一笔。
 主动说话是宿主轮询 `companion_events`，拿到 `wake_due` 才起一轮会话 —— 所以"她没话说"这件事是零成本的。

@@ -125,3 +125,59 @@ class SayTest(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PendingTicketTest(unittest.TestCase):
+    """决策时记的账，开口时不能再记一次。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _with_ticket(self, action: str = "speak", at: datetime = NOW, count: int = 1):
+        st = quota.default_state(NOW.date().isoformat())
+        st["count"] = count
+        st = quota.set_pending(st, action, at)
+        self.home.save_json("quota.json", st)
+        return st
+
+    def test_say_uses_the_ticket(self):
+        self._with_ticket()
+        out = guard.say(self.home, "今天风挺大", now=NOW + timedelta(minutes=2))
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(out["reserved"])
+        self.assertEqual(out["quota"]["count"], 1, "同一次开口被扣了两次")
+        self.assertEqual(out["quota"].get("pending"), {})
+
+    def test_ticket_is_one_shot(self):
+        self._with_ticket()
+        guard.say(self.home, "今天风挺大", now=NOW + timedelta(minutes=2))
+        second = guard.say(self.home, "顺便说一句别的", now=NOW + timedelta(minutes=3))
+        self.assertFalse(second["reserved"])
+        self.assertEqual(second["quota"]["count"], 2)
+
+    def test_expired_ticket_does_not_pay(self):
+        self._with_ticket()
+        out = guard.say(self.home, "今天风挺大", now=NOW + timedelta(minutes=30))
+        self.assertFalse(out["reserved"])
+        self.assertEqual(out["quota"]["count"], 2)
+
+    def test_ticket_for_another_action_does_not_pay(self):
+        self._with_ticket(action="voice")
+        out = guard.say(self.home, "今天风挺大", now=NOW + timedelta(minutes=2))
+        self.assertFalse(out["reserved"])
+        self.assertEqual(out["quota"]["count"], 2)
+
+    def test_quota_bucket_api(self):
+        st = quota.default_state()
+        st = quota.bucket_record(st, "bili", NOW)
+        st = quota.bucket_record(st, "bili", NOW)
+        self.assertEqual(quota.bucket_used(st, "bili", NOW), 2)
+        ok, why = quota.bucket_allow(st, "bili", 2, now=NOW)
+        self.assertFalse(ok)
+        self.assertIn("2/2", why)
+        self.assertTrue(quota.bucket_allow(st, "share", 2, now=NOW)[0])

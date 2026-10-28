@@ -99,6 +99,22 @@ class BudgetExceeded(RuntimeError):
     """今日读写额度用完。"""
 
 
+def credential_path(root: Path | str) -> str:
+    """找得到凭证就返回路径，找不到返回空串。只读、不建文件。"""
+    cands = [Path(root) / "bili" / "credential.json"]
+    cands += [Path(p).expanduser() for p in CRED_CANDIDATES]
+    for p in cands:
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        sess = d.get("sessdata") or d.get("SESSDATA") or d.get("sessData")
+        jct = d.get("bili_jct") or d.get("BILI_JCT") or d.get("biliJct")
+        if sess and jct:
+            return str(p)
+    return ""
+
+
 class NoCredential(RuntimeError):
     """没有可用凭证 —— 这不是错误，是「今天不刷」的理由。"""
 

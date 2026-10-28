@@ -14,12 +14,16 @@ import sys
 from datetime import datetime
 from typing import Any, Callable
 
+from . import __version__
 from . import context as context_mod
 from . import ask as ask_mod, bili, cost, device, drive, events, fence, group, life, memory, mood as mood_mod, opinion, people, react as react_mod, sticker, voice
 from .store import Home
 
 PROTOCOL = "2024-11-05"
-SERVER = {"name": "companion-kit", "version": "0.1.0"}
+# 客户端会带自己支持的版本；我们认得这几个，回它要的那个，不认得就回自己的。
+# 一直硬回 2024-11-05 也能用，但新客户端会以为服务端很旧。
+SUPPORTED = ("2024-11-05", "2025-03-26", "2025-06-18")
+SERVER = {"name": "companion-kit", "version": __version__}
 
 Tool = dict[str, Any]
 
@@ -406,6 +410,29 @@ HANDLERS: dict[str, Callable[[Home, dict[str, Any]], dict[str, Any]]] = {
 }
 
 
+# ── 工具安全注解 ───────────────────────────────────────────
+# MCP 客户端（openclaw / codex）会看这几个 hint 决定要不要为每次调用弹批准。
+# 不写的话默认"未知"，等于每个只读查询都要人点一次 —— 那这个服务没法日常用。
+_READ_ONLY = {
+    "companion_context", "companion_status", "companion_events", "companion_cost",
+    "companion_memory_search", "companion_group_judge", "companion_sticker_pick",
+    "companion_sticker_stats", "device_look",
+}
+# 会改变他眼前环境的东西：明确标出来，让客户端按危险动作对待
+_DESTRUCTIVE = {"device_act", "device_open"}
+# 会出网的
+_OPEN_WORLD = {"companion_bili"}
+
+for _tool in TOOLS:
+    _name = _tool["name"]
+    _tool["annotations"] = {
+        "readOnlyHint": _name in _READ_ONLY,
+        "destructiveHint": _name in _DESTRUCTIVE,
+        "idempotentHint": _name in _READ_ONLY,
+        "openWorldHint": _name in _OPEN_WORLD,
+    }
+
+
 # ── JSON-RPC ───────────────────────────────────────────────
 def _err(id_: Any, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": id_, "error": {"code": code, "message": message}}
@@ -425,8 +452,9 @@ def handle(home: Home, req: dict[str, Any]) -> dict[str, Any] | None:
         return None  # notifications/initialized 之类
 
     if method == "initialize":
+        asked = str(params.get("protocolVersion") or "")
         return _ok(id_, {
-            "protocolVersion": PROTOCOL,
+            "protocolVersion": asked if asked in SUPPORTED else PROTOCOL,
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": SERVER,
             "instructions": "伴侣运行时。每轮开头调 companion_context；想让她主动说话时轮询 companion_events。",
@@ -457,6 +485,13 @@ def handle(home: Home, req: dict[str, Any]) -> dict[str, Any] | None:
 def serve(home: Home, *, stdin=None, stdout=None) -> int:
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
+    # MCP 规定消息是 UTF-8。Windows 控制台/宿主可能把 stdio 设成 GBK（cp936），
+    # 那样中文一写出去客户端就连 JSON 都解析不了 —— 实测过，不是假想。
+    for stream, enc in ((stdin, "utf-8"), (stdout, "utf-8")):
+        try:
+            stream.reconfigure(encoding=enc, errors="strict")  # type: ignore[attr-defined]
+        except Exception:
+            pass
     home.init()
     for line in stdin:
         line = line.strip()

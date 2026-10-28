@@ -294,7 +294,8 @@ class ObserveTest(unittest.TestCase):
                 patch.object(device, "screenshot_desktop") as desk, \
                 patch.object(device, "foreground", return_value="记事本"), \
                 patch.object(device, "list_windows", return_value=[{"title": "记事本"}]), \
-                patch.object(device, "screen_size", return_value=(1920, 1080)):
+                patch.object(device, "screen_size", return_value=(1920, 1080)), \
+                patch.object(device, "screen_origin", return_value=(0, 0)):
             got = device.look(self.home, "desktop", window="记事本")
         self.assertTrue(got["ok"], got)
         self.assertEqual(calls["want"], "记事本")

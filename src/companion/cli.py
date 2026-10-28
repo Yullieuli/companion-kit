@@ -520,13 +520,25 @@ def cmd_doctor(home: Home, args) -> int:
         ("voice", "语音"), ("mcp", "MCP 服务"), ("ask", "动手前的请示"),
         ("bilinet", "B 站传输（WBI/节流/熔断）"), ("bili", "刷 B 站（挑/读/分享）"),
     ]
+    # 导入成功 ≠ 这台机器上能用。桌面那块是 Win32 API，别的系统导得进来、
+    # 一调用就抛错；体检如果只打 ✓，等于告诉用户"好的"，然后在第一次用时炸。
+    import sys as _sys
+
+    platform_notes: dict[str, str] = {}
+    if _sys.platform != "win32":
+        platform_notes["devwin"] = "仅 Windows；本机调用会报 DesktopError"
+        platform_notes["device"] = "桌面截图/输入仅 Windows；adb 与浏览器 CDP 可用"
+
     checks: list[dict[str, Any]] = []
     for name, desc in mods:
         try:
             importlib.import_module(f"companion.{name}")
-            checks.append({"item": name, "desc": desc, "ok": True, "detail": ""})
+            checks.append({"item": name, "desc": desc, "ok": True, "detail": "",
+                           "note": platform_notes.get(name, "")})
         except Exception as e:
-            checks.append({"item": name, "desc": desc, "ok": False, "detail": f"{type(e).__name__}: {e}"})
+            checks.append({"item": name, "desc": desc, "ok": False,
+                           "detail": f"{type(e).__name__}: {e}",
+                           "note": platform_notes.get(name, "")})
 
     tools = {
         "adb": sh.which("adb") or sh.which("adb.exe") or "",
@@ -543,6 +555,7 @@ def cmd_doctor(home: Home, args) -> int:
         "home": str(home.root),
         "package_dir": str(Path(__file__).parent),
         "modules": checks,
+        "limited": [c["item"] for c in checks if c.get("note")],
         "external": tools,
         "pyc_count": len(pyc),
         "av_hint": {
@@ -564,7 +577,11 @@ def cmd_doctor(home: Home, args) -> int:
     print(f"包目录  {payload['package_dir']}")
     print()
     for c in checks:
-        print(f"  {'✓' if c['ok'] else '✗'} {c['item']:10} {c['desc']}" + ("" if c["ok"] else f"  → {c['detail']}"))
+        mark = "✓" if c["ok"] else "✗"
+        tail = "" if c["ok"] else f"  → {c['detail']}"
+        if c.get("note"):
+            tail += f"\n               · {c['note']}"
+        print(f"  {mark} {c['item']:10} {c['desc']}{tail}")
     print()
     for k, v in tools.items():
         print(f"  {'✓' if v else '·'} {k:10} {v or '（没装，相关功能会自己降级）'}")

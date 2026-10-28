@@ -32,6 +32,8 @@ def default_state(today: str | None = None) -> dict[str, Any]:
         # 除"主动开口"之外还有别的额度：刷片、分享。它们和说话一样是每天限量的，
         # 但没有 45 分钟间隔这一说。放在同一本 quota.json 里，跨天一起归零。
         "buckets": {},
+        # 已经记过账、还没真开口的那一次。"决策时记账"和"开口时记账"不能各记一次。
+        "pending": {},
     }
 
 
@@ -141,6 +143,44 @@ def bucket_allow(state: dict[str, Any], name: str, cap: int, *,
         if left > 0:
             return False, f"还要等 {max(1, int(left // 60))} 分钟"
     return True, ""
+
+
+PENDING_TTL_MIN = 20
+
+
+def set_pending(state: dict[str, Any], action: str, now: datetime | None = None) -> dict[str, Any]:
+    """决策时先记账，并留一张"这次已经付过钱了"的票。
+
+    为什么需要票：drive 在决策那一刻就扣一次（否则同一分钟会反复叫醒），
+    而宿主真开口时 `say` 还要过三道闸。没有票，同一次开口会被扣两次。
+    """
+    now = now or datetime.now()
+    st = _roll(state, now)
+    st["pending"] = {"action": str(action), "at": now.timestamp()}
+    return st
+
+
+def take_pending(state: dict[str, Any], now: datetime | None = None, *,
+                 action: str | None = None,
+                 ttl_min: float = PENDING_TTL_MIN) -> tuple[dict[str, Any], bool]:
+    """取票。返回 (新状态, 是否用上了票)。
+
+    过期就清掉：20 分钟前那次"想说"跟现在这句话没关系，不能拿旧票免单。
+    """
+    now = now or datetime.now()
+    st = _roll(state, now)
+    p = st.get("pending") or {}
+    at = float(p.get("at") or 0)
+    if not p:
+        return st, False
+    fresh = (now.timestamp() - at) <= float(ttl_min) * 60
+    match = action is None or str(p.get("action") or "") == str(action)
+    if fresh and match:
+        st["pending"] = {}
+        return st, True
+    if not fresh:
+        st["pending"] = {}
+    return st, False
 
 
 def summary(state: dict[str, Any], cfg: dict[str, Any] | None, now: datetime | None = None,

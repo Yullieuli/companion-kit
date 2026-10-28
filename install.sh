@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# 有人会用 `sh install.sh`（dash 不认 pipefail，报错信息还很难懂）。
+# 自己换到 bash 再跑，别让安装停在第一行。
+if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
+
 # companion-kit 一行安装（Linux / macOS / WSL）
 #
 #   curl -fsSL https://raw.githubusercontent.com/Yullieuli/companion-kit/main/install.sh | bash
@@ -16,7 +20,10 @@
 set -uo pipefail
 
 REPO="${COMPANION_REPO:-https://github.com/Yullieuli/companion-kit}"
-WHEEL="${COMPANION_WHEEL:-$REPO/releases/download/v0.2.8/companion_kit-0.2.8-py3-none-any.whl}"
+# 版本只有一个来源：发版时改这一行（或用 COMPANION_VERSION 覆盖）。
+# 以前这里和文件名各写一次，结果一个是 0.2.8、一个是 0.2.3，装上去的是半年前的包。
+VERSION="${COMPANION_VERSION:-0.9.2}"
+WHEEL="${COMPANION_WHEEL:-$REPO/releases/download/v$VERSION/companion_kit-$VERSION-py3-none-any.whl}"
 HOME_DIR="${COMPANION_HOME:-$HOME/.companion}"
 PYTHON="${COMPANION_PYTHON:-}"
 FROM=""
@@ -83,6 +90,9 @@ say "venv: $VENV"
 
 if [ -n "$FROM" ]; then
   say "从本地装：$FROM"
+  # Python 3.12 起 venv 默认不带 setuptools，而本地装/源码装要它来做构建。
+  # 不先补这一步，`--from .` 在一台新机器上必然失败（报 BackendUnavailable）。
+  "$VPY" -m pip install -q --upgrade setuptools wheel >/dev/null 2>&1 || true
   "$VPY" -m pip install -q --no-compile -e "$FROM" || { echo "本地安装失败" >&2; exit 1; }
 else
   say "装 whl（不需要 git）"

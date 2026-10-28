@@ -30,6 +30,15 @@ class EventsTest(unittest.TestCase):
         self.assertEqual(fresh[0]["action"], "speak")
         self.assertEqual(cur, 1)
 
+    def test_explicit_since_does_not_move_shared_cursor(self):
+        # dsh 每轮传 since；如果它顺手把全局 cursor 推到最新，
+        # 人跑 `companion events` 就永远看不到东西了。
+        events.emit(self.home, "idle", T0)
+        events.poll(self.home, since=0)
+        self.assertEqual(events.cursor(self.home), 0)
+        events.poll(self.home)
+        self.assertEqual(events.cursor(self.home), 1)
+
     def test_cursor_prevents_redelivery(self):
         events.emit(self.home, "idle", T0)
         _, cur = events.poll(self.home)

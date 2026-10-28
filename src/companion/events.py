@@ -52,12 +52,16 @@ def save_cursor(home, value: int) -> None:
 
 
 def poll(home, since: int | None = None, advance: bool = True) -> tuple[list[dict[str, Any]], int]:
-    """返回 (新事件, 新 cursor)。since 不传就沿用文件里存的。"""
+    """返回 (新事件, 新 cursor)。since 不传就沿用文件里存的。
+
+    显式传 since 的读者（dsh、看板）自己管进度，**不动共享 cursor**：
+    否则它每轮把 cursor 推到最新，另一个读者（CLI / 人）就永远收不到事件了。
+    """
     start = cursor(home) if since is None else max(0, int(since))
     rows = read_all(home)
     fresh = rows[start:]
     new_cursor = len(rows)
-    if advance:
+    if advance and since is None:
         save_cursor(home, new_cursor)
     return fresh, new_cursor
 

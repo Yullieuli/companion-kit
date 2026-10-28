@@ -805,16 +805,25 @@ def tick(home: Home, *, net: Any = None, cfg: dict[str, Any] | None = None,
     }
 
 
+def has_credential(home: Home) -> bool:
+    """能不能真的刷。没凭证时 due 不该说"可以" —— 那是句空话。"""
+    from . import bilinet
+
+    return bool(bilinet.credential_path(home.root))
+
+
 def status(home: Home, *, now: datetime | None = None) -> dict[str, Any]:
     cfg = config(home)
     st = load(home)
     now = now or datetime.now()
     d = due(home, cfg=cfg, now=now)
+    logged = has_credential(home)
     shares = st.get("shares") or {}
     return {
         "enabled": bool(cfg.get("enabled", True)),
-        "due": d["due"],
-        "why": d["why"],
+        "logged_in": logged,
+        "due": bool(d["due"] and logged),
+        "why": d["why"] or ("" if logged else "还没有 B 站凭证（放到 ~/.companion/bili/credential.json）"),
         "watched_today": daily_used(home, "bili", st=st, now=now),
         "max_per_day": int(cfg.get("max_per_day") or 4),
         "last_at": datetime.fromtimestamp(float(st.get("last_at") or 0)).isoformat(timespec="minutes")

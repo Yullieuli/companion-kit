@@ -9,7 +9,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from companion import bili, events, initiative, life  # noqa: E402
+from companion import bilinet, bili, events, initiative, life  # noqa: E402
+from unittest.mock import patch  # noqa: E402
 from companion.store import Home  # noqa: E402
 
 NOW = datetime(2026, 10, 28, 21, 0)
@@ -360,11 +361,25 @@ class _Rnd:
 
 class StatusTest(Base):
     def test_status_shape(self):
-        st = bili.status(self.home, now=NOW)
+        # 没凭证时不能说"可以刷" —— 那是句空话，真去 tick 会直接报错。
+        # 这台机器上可能真有全局凭证（~/.bilibili-cli），测试要把它遮掉，
+        # 否则同一份代码在 CI 上过、在开发机上红，看起来像 bug。
+        with patch.object(bilinet, "CRED_CANDIDATES", ()):
+            st = bili.status(self.home, now=NOW)
         self.assertTrue(st["enabled"])
-        self.assertTrue(st["due"])
+        self.assertFalse(st["logged_in"])
+        self.assertFalse(st["due"])
+        self.assertIn("凭证", st["why"])
         self.assertEqual(st["watched_today"], 0)
         self.assertIn("taste", st)
+
+    def test_status_with_credential_is_due(self):
+        self.home.save_json("bili/credential.json",
+                            {"sessdata": "x", "bili_jct": "y"})
+        st = bili.status(self.home, now=NOW)
+        self.assertTrue(st["logged_in"])
+        self.assertTrue(st["due"])
+        self.assertEqual(st["why"], "")
 
     def test_config_is_merged_not_replaced(self):
         self.home.save_json(bili.CONFIG, {"taste": {"like": ["围棋"]}})

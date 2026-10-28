@@ -15,7 +15,7 @@ import json
 from datetime import datetime
 from typing import Any
 
-from . import clock, cost, events, initiative, mood as mood_mod, quota as quota_mod
+from . import bili, clock, cost, events, initiative, mood as mood_mod, quota as quota_mod
 from .store import Home
 
 SPEAKING = ("speak", "voice", "sing", "share")
@@ -121,6 +121,8 @@ def tick(
     b = {**cost.DEFAULT_BUDGET, **(budget or {})}
     remaining = max(0.0, float(b["daily_cny"]) - spent)
     bili_ok, bili_why, bili_pending = _bili_state(home, now)
+    if bili_ok and not bili.has_credential(home):
+        bili_ok, bili_why = False, "还没配 B 站凭证"
     # 刷片只在作息窗口内（SPEC 5.8）。窗口外她该休息，不是换个方式熬夜。
     if bili_ok and not clock.in_window(rhythm, now):
         bili_ok, bili_why = False, "不在作息窗口"
@@ -148,6 +150,8 @@ def tick(
     if decision["action"] in SPEAKING:
         # 先记账再发事件：宁可少说一句，也不要重复开口
         q2 = quota_mod.record(q, now, decision["why"])
+        # 留票：宿主真开口时 say 用它免掉第二次扣费（见 quota.take_pending）
+        q2 = quota_mod.set_pending(q2, decision["action"], now)
         home.save_json("quota.json", q2)
         cap = quota_mod.cap_for(quota_cfg or {}, _owner_last_seen(home), now)
         event = events.emit(
