@@ -6,6 +6,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -227,3 +228,75 @@ class InputTest(unittest.TestCase):
     def test_act_rejects_unknown_desktop_action(self):
         out = device.act(self.home, "desktop", "format_disk", {"x": 1, "y": 1})
         self.assertFalse(out["ok"])
+
+
+class ObserveTest(unittest.TestCase):
+    """看：窗口级截图 + 本地 OCR。测试不碰真实屏幕，走假图。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+        self.shot = self.home.root / "fake.png"
+        self.shot.write_bytes(b"\x89PNG\r\n\x1a\n fake")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_parse_ocr_tsv_groups_lines_and_drops_noise(self):
+        tsv = "\n".join([
+            "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext",
+            "5\t1\t1\t1\t1\t1\t10\t10\t30\t12\t96\t设置",
+            "5\t1\t1\t1\t1\t2\t45\t10\t30\t12\t88\t通用",
+            "5\t1\t1\t1\t2\t1\t10\t30\t30\t12\t91\t音量",
+            "5\t1\t1\t1\t2\t2\t45\t30\t30\t12\t12\t（噪点）",
+        ])
+        got = device.parse_ocr_tsv(tsv, min_conf=40)
+        self.assertEqual(got["text"], "设置 通用\n音量")
+        self.assertEqual(len(got["lines"]), 2)
+        self.assertGreater(got["lines"][0]["conf"], 90)
+
+    def test_ocr_without_engine_is_honest(self):
+        with patch.object(device, "ocr_bin", return_value=""):
+            got = device.ocr_image(self.home, self.shot)
+        self.assertEqual(got["backend"], "none")
+        self.assertEqual(got["text"], "")
+        self.assertIn("vision", got["hint"])
+
+    def test_ocr_can_be_switched_off(self):
+        cfg = device.config(self.home)
+        cfg["ocr"] = {**cfg["ocr"], "enabled": False}
+        self.home.save_json("devices.json", cfg)
+        with patch.object(device, "ocr_bin", return_value="/usr/bin/tesseract"):
+            got = device.ocr_image(self.home, self.shot)
+        self.assertEqual(got["backend"], "off")
+
+    def test_observe_returns_shot_meta_and_hint(self):
+        fake = {"ok": True, "target": "desktop", "shot": str(self.shot), "kb": 1,
+                "foreground": "记事本", "windows": ["记事本"], "screen": [1920, 1080], "window": ""}
+        with patch.object(device, "look", return_value=dict(fake)), \
+                patch.object(device, "ocr_bin", return_value=""):
+            got = device.observe(self.home, "desktop")
+        self.assertTrue(got["ok"])
+        self.assertEqual(got["foreground"], "记事本")
+        self.assertEqual(got["ocr"]["backend"], "none")
+        self.assertIn("别概括", got["describe_hint"])
+        self.assertEqual(self.home.read_jsonl("logs/device.jsonl")[-1]["action"], "observe")
+
+    def test_look_with_window_uses_window_capture(self):
+        calls = {}
+
+        def fake_window(home, want, *, target="window"):
+            calls["want"] = want
+            return self.shot
+
+        with patch.object(device, "screenshot_window", side_effect=fake_window), \
+                patch.object(device, "screenshot_desktop") as desk, \
+                patch.object(device, "foreground", return_value="记事本"), \
+                patch.object(device, "list_windows", return_value=[{"title": "记事本"}]), \
+                patch.object(device, "screen_size", return_value=(1920, 1080)):
+            got = device.look(self.home, "desktop", window="记事本")
+        self.assertTrue(got["ok"], got)
+        self.assertEqual(calls["want"], "记事本")
+        self.assertEqual(got["window"], "记事本")
+        self.assertFalse(desk.called)

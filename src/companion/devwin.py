@@ -47,9 +47,26 @@ def _win():
     return ctypes, wintypes, u, g
 
 
-def screen_size() -> tuple[int, int]:
+def screen_size(virtual: bool = True) -> tuple[int, int]:
+    """屏幕尺寸。默认给**虚拟桌面**（所有显示器拼起来）。
+
+    只报主屏会出两种错：双屏截图只截到一半；游戏在副屏时坐标全偏。
+    """
     ctypes, wintypes, u, _ = _win()
+    if virtual:
+        w, h = int(u.GetSystemMetrics(78)), int(u.GetSystemMetrics(79))   # SM_CXVIRTUALSCREEN / CY
+        if w > 0 and h > 0:
+            return w, h
     return int(u.GetSystemMetrics(0)), int(u.GetSystemMetrics(1))
+
+
+def screen_origin() -> tuple[int, int]:
+    """虚拟桌面的左上角。副屏在左边时是负数，截图要带上这个偏移。"""
+    ctypes, wintypes, u, _ = _win()
+    try:
+        return int(u.GetSystemMetrics(76)), int(u.GetSystemMetrics(77))   # SM_XVIRTUALSCREEN / Y
+    except Exception:
+        return 0, 0
 
 
 def foreground() -> str:
@@ -64,9 +81,49 @@ def foreground() -> str:
         return ""
 
 
+def _flush_png(home: Home, target: str, mem: int, bmp: int, w: int, h: int, g) -> Path:
+    """把内存位图导成 PNG。截图与窗口捕获共用这一份，免得两处各写一遍 DIB。"""
+    ctypes, wintypes, _, _ = _win()
+
+    class BIH(ctypes.Structure):
+        _fields_ = [
+            ("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG), ("biHeight", wintypes.LONG),
+            ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+            ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", wintypes.LONG),
+            ("biYPelsPerMeter", wintypes.LONG), ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD),
+        ]
+
+    bi = BIH()
+    bi.biSize = ctypes.sizeof(BIH)
+    bi.biWidth = w
+    bi.biHeight = -h  # 负数 = 自上而下
+    bi.biPlanes = 1
+    bi.biBitCount = 32
+    bi.biCompression = 0
+
+    buf = ctypes.create_string_buffer(w * h * 4)
+    if not g.GetDIBits(mem, bmp, 0, h, buf, ctypes.byref(bi), 0):
+        raise DesktopError("GetDIBits 失败")
+    raw = buf.raw
+    rgb = bytearray(w * h * 3)
+    for i in range(w * h):
+        b, gg, r = raw[i * 4], raw[i * 4 + 1], raw[i * 4 + 2]
+        rgb[i * 3] = r
+        rgb[i * 3 + 1] = gg
+        rgb[i * 3 + 2] = b
+    g.DeleteObject(bmp)
+    g.DeleteDC(mem)
+    return write_png(_shot_path(home, target), w, h, bytes(rgb))
+
+
 def screenshot_desktop(home: Home, target: str = "desktop", *, region: tuple[int, int, int, int] | None = None) -> Path:
     ctypes, wintypes, u, g = _win()
-    x, y, w, h = region or (0, 0, *screen_size())
+    if region:
+        x, y, w, h = region
+    else:
+        ox, oy = screen_origin()
+        w, h = screen_size()
+        x, y = ox, oy
     hdc = u.GetDC(0)
     if not hdc:
         raise DesktopError("拿不到屏幕 DC")
@@ -77,38 +134,40 @@ def screenshot_desktop(home: Home, target: str = "desktop", *, region: tuple[int
         SRCCOPY = 0x00CC0020
         if not g.BitBlt(mem, 0, 0, w, h, hdc, x, y, SRCCOPY):
             raise DesktopError("BitBlt 失败（可能是锁屏或无桌面会话）")
-
-        class BIH(ctypes.Structure):
-            _fields_ = [
-                ("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG), ("biHeight", wintypes.LONG),
-                ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
-                ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", wintypes.LONG),
-                ("biYPelsPerMeter", wintypes.LONG), ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD),
-            ]
-
-        bi = BIH()
-        bi.biSize = ctypes.sizeof(BIH)
-        bi.biWidth = w
-        bi.biHeight = -h  # 负数 = 自上而下
-        bi.biPlanes = 1
-        bi.biBitCount = 32
-        bi.biCompression = 0
-
-        buf = ctypes.create_string_buffer(w * h * 4)
-        if not g.GetDIBits(mem, bmp, 0, h, buf, ctypes.byref(bi), 0):
-            raise DesktopError("GetDIBits 失败")
-        raw = buf.raw
-        rgb = bytearray(w * h * 3)
-        for i in range(w * h):
-            b, gg, r = raw[i * 4], raw[i * 4 + 1], raw[i * 4 + 2]
-            rgb[i * 3] = r
-            rgb[i * 3 + 1] = gg
-            rgb[i * 3 + 2] = b
-        g.DeleteObject(bmp)
-        g.DeleteDC(mem)
+        return _flush_png(home, target, mem, bmp, w, h, g)
     finally:
         u.ReleaseDC(0, hdc)
-    return write_png(_shot_path(home, target), w, h, bytes(rgb))
+
+
+def screenshot_window(home: Home, want: str, *, target: str = "window") -> Path:
+    """按标题抓一个窗口，哪怕它被别的窗口盖着。
+
+    为什么不用屏幕截图裁：被盖住的部分裁出来是别人的窗口，她会对着别人的内容说话。
+    PrintWindow + PW_RENDERFULLCONTENT 能让窗口自己画一遍自己。
+    """
+    ctypes, wintypes, u, g = _win()
+    u.PrintWindow.restype = wintypes.BOOL
+    u.PrintWindow.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint]
+    rect = window_rect(want)
+    if not rect:
+        raise DesktopError(f"没找到标题含「{want}」的窗口")
+    w, h = int(rect["w"]), int(rect["h"])
+    if w < 8 or h < 8:
+        raise DesktopError("窗口太小，截不了")
+    hwnd = ctypes.c_void_p(int(rect["hwnd"]))
+    hdc = u.GetDC(0)
+    mem = g.CreateCompatibleDC(hdc)
+    bmp = g.CreateCompatibleBitmap(hdc, w, h)
+    g.SelectObject(mem, bmp)
+    try:
+        ok = u.PrintWindow(hwnd, mem, 2)  # PW_RENDERFULLCONTENT：全内容，含 DirectComposition
+        if not ok:
+            # 某些老程序只认 BitBlt；退一步，至少把可见区域拿到
+            if not g.BitBlt(mem, 0, 0, w, h, hdc, int(rect["x"]), int(rect["y"]), 0x00CC0020):
+                raise DesktopError("PrintWindow 与 BitBlt 都失败")
+        return _flush_png(home, target, mem, bmp, w, h, g)
+    finally:
+        u.ReleaseDC(0, hdc)
 
 
 def click(x: int, y: int, *, double: bool = False) -> None:

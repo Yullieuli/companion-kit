@@ -38,8 +38,8 @@ from .store import Home
 from .devcdp import (BrowserError, browser_click, browser_key, browser_look,
                      browser_open, browser_swipe, browser_type, cdp_target)
 from .devwin import (DesktopError, click, drag, focus as focus_window, foreground,
-                     key as press_key, screen_size, screenshot_desktop, type_text,
-                     window_rect, windows as list_windows)
+                     key as press_key, screen_origin, screen_size, screenshot_desktop,
+                     screenshot_window, type_text, window_rect, windows as list_windows)
 from .imgpng import _shot_path, write_png
 
 
@@ -64,6 +64,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "max_screenshot_kb": 3000,
     # 会改变他眼前环境的事，先问一声。点/打字不算——那是已经允许的上下文里做事。
     "ask": {"enabled": True, "actions": ["open", "focus"], "targets": ["game"]},
+    # OCR 只是"帮她把图上的字先读一遍"，读不到就让模型的 vision 看，不影响别的
+    "ocr": {"enabled": True, "lang": "chi_sim+eng", "min_conf": 40},
 }
 
 
@@ -90,6 +92,7 @@ def config(home: Home) -> dict[str, Any]:
     out = json.loads(json.dumps(DEFAULT_CONFIG))
     out.update({k: v for k, v in d.items() if k in DEFAULT_CONFIG})
     out["ask"] = {**DEFAULT_CONFIG["ask"], **(d.get("ask") or {})}
+    out["ocr"] = {**DEFAULT_CONFIG["ocr"], **(d.get("ocr") or {})}
     return out
 
 
@@ -244,7 +247,8 @@ def phone_open(package: str, *, serial: str = "") -> str:
 
 
 # ── 对外三个动作：看 / 动 / 开 ──────────────────────────────
-def look(home: Home, target: str = "desktop", *, serial: str = "") -> dict[str, Any]:
+def look(home: Home, target: str = "desktop", *, serial: str = "",
+         window: str = "") -> dict[str, Any]:
     v = check(home, target=target, action="look")
     if not v.ok:
         _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": target,
@@ -258,18 +262,26 @@ def look(home: Home, target: str = "desktop", *, serial: str = "") -> dict[str, 
             p = browser_look(home)
             meta = {"cdp": bool(cdp_target())}
         elif target in ("desktop", "game"):
-            p = screenshot_desktop(home, target)
+            p = screenshot_window(home, window, target=target) if window \
+                else screenshot_desktop(home, target)
             try:
                 tops = [w["title"] for w in list_windows(6)]
             except Exception:
                 tops = []
-            meta = {"foreground": foreground(), "screen": list(screen_size()), "windows": tops}
+            meta = {"foreground": foreground(), "screen": list(screen_size()),
+                    "origin": list(screen_origin()), "windows": tops, "window": window or ""}
         else:
             return {"ok": False, "error": f"不认识的目标：{target}（phone/desktop/browser/game）"}
         size_kb = max(1, p.stat().st_size // 1024)
+        over = size_kb > int(config(home).get("max_screenshot_kb") or 3000)
         _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": target,
                     "action": "look", "ok": True, "shot": str(p), "kb": size_kb})
-        return {"ok": True, "target": target, "shot": str(p), "kb": size_kb, **meta}
+        out = {"ok": True, "target": target, "shot": str(p), "kb": size_kb, **meta}
+        if over:
+            # 超过上限就明确说一句：宿主要把图缩放/裁剪，别整张塞进上下文
+            out["oversize"] = True
+            out["hint"] = f"图 {size_kb}KB 超过 {config(home).get('max_screenshot_kb')}KB，进上下文前先缩"
+        return out
     except Exception as e:
         _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": target,
                     "action": "look", "ok": False, "reason": str(e)})
@@ -307,6 +319,7 @@ def act(
     is_owner: bool = True,
     serial: str = "",
     ask_id: str = "",
+    before: bool = False,
 ) -> dict[str, Any]:
     args = args or {}
     v = check(home, target=target, action=action, args=args, is_owner=is_owner)
@@ -322,6 +335,11 @@ def act(
         return blocked
     key = _key(target, action, args)
     started = time.time()
+    pre_shot = ""
+    if before:
+        # 要"执行前那张"就得多截一次图。默认不截：每个动作两张图，磁盘与耗时都翻倍。
+        pre = look(home, "browser" if target == "browser" else target, serial=serial)
+        pre_shot = str(pre.get("shot") or "")
     try:
         if target == "phone":
             if action in ("tap", "click"):
@@ -395,7 +413,8 @@ def act(
         _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": target,
                     "action": action, "args": args, "ok": True, "ms": int(dt * 1000)})
         return {"ok": True, "target": target, "action": action, "ms": int(dt * 1000),
-                "after": after.get("shot"), "foreground": foreground() if target != "phone" else ""}
+                "before": pre_shot, "after": after.get("shot"),
+                "foreground": foreground() if target != "phone" else ""}
     except Exception as e:
         _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": target,
                     "action": action, "ok": False, "reason": str(e)})
@@ -435,6 +454,92 @@ def open_thing(home: Home, target: str, what: str, *, is_owner: bool = True,
         _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": target,
                     "action": "open", "what": what, "ok": False, "reason": str(e)})
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def parse_ocr_tsv(tsv: str, *, min_conf: float = 40) -> dict[str, Any]:
+    """把 tesseract 的 TSV 输出按行拼回去。
+
+    只取 level=5（词）这一层自己拼行，不信任它的文本输出：
+    TSV 带每词的坐标与置信度，才能把"左边菜单 / 右边正文"分开读。
+    """
+    rows: dict[tuple[str, str, str, str], list[str]] = {}
+    confs: dict[tuple[str, str, str, str], list[float]] = {}
+    for line in (tsv or "").splitlines()[1:]:
+        cols = line.split("\t")
+        if len(cols) < 12:
+            continue
+        try:
+            level = int(cols[0])
+            conf = float(cols[10])
+        except ValueError:
+            continue
+        word = cols[11].strip()
+        if level != 5 or not word or conf < min_conf:
+            continue
+        key = (cols[1], cols[2], cols[3], cols[4])
+        rows.setdefault(key, []).append(word)
+        confs.setdefault(key, []).append(conf)
+    lines = [{"text": " ".join(v), "conf": round(sum(confs[k]) / len(confs[k]), 1)}
+             for k, v in sorted(rows.items())]
+    return {"text": "\n".join(x["text"] for x in lines), "lines": lines}
+
+
+def ocr_bin() -> str:
+    """找一个能用的 tesseract。找不到就是没有 —— 不装、不联网下。"""
+    found = shutil.which("tesseract") or shutil.which("tesseract.exe")
+    if found:
+        return found
+    if sys.platform == "win32":
+        for cand in (r"C://Program Files//Tesseract-OCR//tesseract.exe",
+                     r"C://Program Files (x86)//Tesseract-OCR//tesseract.exe"):
+            if Path(cand).exists():
+                return cand
+    return ""
+
+
+def ocr_image(home: Home, shot: str | Path, *, lang: str = "") -> dict[str, Any]:
+    """读图上的字。没有引擎就老实返回 none，让模型的 vision 接手。"""
+    exe = ocr_bin()
+    if not exe:
+        return {"backend": "none", "text": "", "lines": [],
+                "hint": "没装 tesseract；把截图交给宿主的 vision 模型读，别猜"}
+    cfg = config(home).get("ocr") or {}
+    if not cfg.get("enabled", True):
+        return {"backend": "off", "text": "", "lines": [], "hint": "OCR 在 devices.json 里关着"}
+    want = lang or str(cfg.get("lang") or "chi_sim+eng")
+    for use in (want, "eng"):
+        try:
+            done = subprocess.run([exe, str(shot), "stdout", "-l", use, "--psm", "6", "tsv"],
+                                  capture_output=True, text=True, timeout=60)
+        except Exception as e:
+            return {"backend": "error", "text": "", "lines": [],
+                    "hint": f"{type(e).__name__}: {e}"}
+        if done.returncode == 0:
+            parsed = parse_ocr_tsv(done.stdout, min_conf=float(cfg.get("min_conf") or 40))
+            return {"backend": f"tesseract:{use}", "chars": len(parsed["text"]), **parsed}
+    return {"backend": "error", "text": "", "lines": [],
+            "hint": (done.stderr or "")[:200]}
+
+
+def observe(home: Home, target: str = "desktop", *, window: str = "",
+            serial: str = "", ocr: bool = True) -> dict[str, Any]:
+    """看：一张图 + 一句"这是哪" + 图上的字（如果有引擎）。
+
+    分工写在 SPEC 5.7：能本地做的先本地做。OCR 是本地做的部分；
+    "这画面在讲什么"交给宿主的视觉模型 —— companion 不调模型。
+    """
+    got = look(home, target, serial=serial, window=window)
+    if not got.get("ok"):
+        return got
+    out = dict(got)
+    if ocr:
+        out["ocr"] = ocr_image(home, got["shot"])
+    out["describe_hint"] = ("先用 ocr.text 回答能读到的内容；读不到再看图。"
+                            "画面里出现的文字/按钮/报错，照原样引用，别概括。")
+    _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": target,
+                "action": "observe", "ok": True, "shot": got.get("shot"),
+                "window": window or "", "ocr": (out.get("ocr") or {}).get("backend")})
+    return out
 
 
 def windows_list(home: Home, limit: int = 30) -> dict[str, Any]:

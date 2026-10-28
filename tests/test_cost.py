@@ -70,3 +70,45 @@ class LedgerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class RouteTest(unittest.TestCase):
+    """分级模型：同一件事花多少钱差几十倍，档位必须能查、能改。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_default_tiers(self):
+        self.assertEqual(cost.route("bili_pick", self.home)["tier"], "cheap")
+        self.assertEqual(cost.route("chat", self.home)["tier"], "work")
+        self.assertEqual(cost.route("bili_debrief", self.home)["tier"], "deep")
+        self.assertEqual(cost.route("从来没听过的任务", self.home)["tier"], "work")
+
+    def test_cheap_is_much_cheaper_than_deep(self):
+        cheap = cost.route("bili_pick", self.home)["est_cny"]
+        deep = cost.route("bili_debrief", self.home)["est_cny"]
+        self.assertLess(cheap, deep / 5)
+
+    def test_store_can_override_task_and_model(self):
+        self.home.save_json(cost.ROUTE_FILE, {
+            "tasks": {"bili_pick": "deep"},
+            "tiers": {"deep": {"model": "deepseek-v4.1"}},
+        })
+        r = cost.route("bili_pick", self.home)
+        self.assertEqual(r["tier"], "deep")
+        self.assertEqual(r["model"], "deepseek-v4.1")
+
+    def test_bad_override_is_ignored(self):
+        self.home.save_json(cost.ROUTE_FILE, {"tasks": {"chat": "不存在的档"}})
+        self.assertEqual(cost.route("chat", self.home)["tier"], "work")
+
+    def test_route_has_price_and_tokens(self):
+        r = cost.route("chat", self.home)
+        self.assertIn("input", r["price_per_mtok"])
+        self.assertGreater(r["tokens"]["cached_tokens"], 0)   # 估价值必须按缓存命中算
+        self.assertGreater(r["est_cny"], 0)

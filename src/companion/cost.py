@@ -26,8 +26,71 @@ DEFAULT_PRICES: dict[str, dict[str, float]] = {
 
 DEFAULT_BUDGET = {"daily_cny": 3.0, "warn_at": 0.8}
 
+# ── 分级模型 ────────────────────────────────────────────────
+# 同一个"想"，花多少钱差三倍。所以不是所有活都配得上贵的模型：
+# 判一次"该不该说话"、"这条视频几分"，用最便宜的就行；
+# 深读长文、写日记、需要推理的，才升档。
+TIERS: dict[str, dict[str, str]] = {
+    "cheap": {"model": "agnes-3.0-flash", "why": "只判一次、要的是快不是文采"},
+    "work": {"model": "deepseek-v4.1-flash", "why": "日常对话与工具调用，够用且便宜"},
+    "deep": {"model": "deepseek-v4.1", "why": "深读/长文/需要真的想一遍"},
+}
+
+# 任务 → 档位。改这里比改调用点安全：调用点只写任务名。
+TASK_TIER: dict[str, str] = {
+    "chat": "work", "reply": "work", "tool_use": "work",
+    "group_judge": "cheap", "bili_pick": "cheap", "bili_score": "cheap",
+    "initiative": "cheap", "mood_judge": "cheap", "fence_scan": "cheap",
+    "memory_extract": "cheap", "dedupe": "cheap",
+    "bili_debrief": "deep", "deep_read": "deep", "plan": "deep", "code": "deep",
+    "diary": "work", "summary": "work", "opinion_write": "work", "share": "work",
+}
+
+# 各档一次调用的规模（token）。用来在起会话前估个价，不是精确账单。
+# cached 占大头是**现实**不是乐观：固定前缀在同一会话里命中缓存，
+# 按全价算会把"说一句话"估成十倍，于是什么都不敢做。
+TIER_TOKENS: dict[str, dict[str, int]] = {
+    "cheap": {"fresh_tokens": 1500, "cached_tokens": 8000, "output_tokens": 120},
+    "work": {"fresh_tokens": 3000, "cached_tokens": 24000, "output_tokens": 600},
+    "deep": {"fresh_tokens": 8000, "cached_tokens": 60000, "output_tokens": 1500},
+}
+
+ROUTE_FILE = "cost/route.json"
+
 # 一次"醒来"的典型规模：固定前缀 + 工具定义 + 注入上下文
 TYPICAL_TURN = {"fresh_tokens": 20000, "cached_tokens": 0, "output_tokens": 600}
+
+
+def route_table(home=None) -> dict[str, Any]:
+    """档位与任务映射，可被 store 里的 cost/route.json 覆盖（她/他能自己调）。"""
+    tiers = {k: dict(v) for k, v in TIERS.items()}
+    tasks = dict(TASK_TIER)
+    if home is not None:
+        try:
+            cfg = home._json(ROUTE_FILE, {})  # noqa: SLF001 — store 的唯一出口
+        except Exception:
+            cfg = {}
+        for k, v in (cfg.get("tiers") or {}).items():
+            if isinstance(v, dict) and k in tiers:
+                tiers[k].update({kk: str(vv) for kk, vv in v.items() if kk in ("model", "why")})
+        for k, v in (cfg.get("tasks") or {}).items():
+            if str(v) in tiers:
+                tasks[str(k)] = str(v)
+    return {"tiers": tiers, "tasks": tasks}
+
+
+def route(task: str, home=None, *, prices: dict[str, dict[str, float]] | None = None) -> dict[str, Any]:
+    """这个任务该用哪个档的模型、大概花多少。宿主照着选模型就行。"""
+    table = route_table(home)
+    name = str(task or "chat")
+    tier = table["tasks"].get(name) or "work"
+    info = table["tiers"][tier]
+    tok = TIER_TOKENS.get(tier, TIER_TOKENS["work"])
+    est = cost_cny(tok["fresh_tokens"], tok["cached_tokens"], tok["output_tokens"],
+                   info["model"], prices)
+    return {"task": name, "tier": tier, "model": info["model"], "why": info["why"],
+            "est_cny": round(est, 6), "tokens": tok,
+            "price_per_mtok": price_of(info["model"], prices)}
 
 
 def price_of(model: str, prices: dict[str, dict[str, float]] | None = None) -> dict[str, float]:

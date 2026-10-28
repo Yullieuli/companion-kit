@@ -121,8 +121,20 @@ def cmd_events(home: Home, args) -> int:
 
 
 def cmd_cost(home: Home, args) -> int:
+    # 给了任务名就是问"这件事该用哪个模型、大概多少钱"
+    if getattr(args, "task", ""):
+        r = cost.route(args.task, home)
+        if args.json:
+            _dump(r, True)
+        else:
+            print(f"{r['task']} → {r['tier']} 档 {r['model']}（约 ¥{r['est_cny']:.4f}/次）")
+            print(f"  为什么：{r['why']}")
+            print(f"  规模：新输入 {r['tokens']['fresh_tokens']} · 缓存 {r['tokens']['cached_tokens']}"
+                  f" · 输出 {r['tokens']['output_tokens']}")
+        return 0
     if args.json:
-        _dump({"today_cny": round(cost.today_total(home), 4), "turns": len(cost.load_rows(home))}, True)
+        _dump({"today_cny": round(cost.today_total(home), 4), "turns": len(cost.load_rows(home)),
+               "routes": cost.route_table(home)}, True)
     else:
         print(cost.summary(home))
     return 0
@@ -348,12 +360,15 @@ def cmd_device(home: Home, args) -> int:
     from . import device
 
     if args.action == "look":
-        out = device.look(home, args.target)
+        out = device.look(home, args.target, window=args.window or "")
+    elif args.action == "observe":
+        out = device.observe(home, args.target, window=args.window or "",
+                             ocr=not getattr(args, "no_ocr", False))
     elif args.action == "act":
         payload = {k: getattr(args, k) for k in ("x", "y", "x2", "y2", "text", "key", "window", "double")
                    if getattr(args, k, None) is not None}
         out = device.act(home, args.target, args.act, payload, is_owner=not args.not_owner,
-                         ask_id=args.ask_id)
+                         ask_id=args.ask_id, before=bool(args.before))
     elif args.action == "open":
         out = device.open_thing(home, args.target, args.what, is_owner=not args.not_owner,
                                 ask_id=args.ask_id)
@@ -545,7 +560,8 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--wait", type=float, default=0)
 
     sub.add_parser("status", help="只读状态（不推进决策）")
-    sub.add_parser("cost", help="今日花费")
+    co = sub.add_parser("cost", help="今日花费 / 某任务的模型档位")
+    co.add_argument("task", nargs="?", default="", help="任务名（如 bili_pick / bili_debrief / chat）")
 
     s = sub.add_parser("say", help="记一句她想说的话")
     s.add_argument("--text", required=True)
@@ -627,7 +643,7 @@ def build_parser() -> argparse.ArgumentParser:
     sk.add_argument("--name", default="")
 
     d = sub.add_parser("device", help="手：看屏幕 / 动作 / 打开")
-    d.add_argument("action", choices=["look", "act", "open", "list", "focus", "log"])
+    d.add_argument("action", choices=["look", "observe", "act", "open", "list", "focus", "log"])
     d.add_argument("--target", default="desktop", choices=["phone", "desktop", "browser", "game"])
     d.add_argument("--act", default="tap", choices=["tap", "click", "swipe", "type", "key", "focus"])
     d.add_argument("--x", type=int)
@@ -638,6 +654,8 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--key")
     d.add_argument("--window", help="窗口标题（focus 用）")
     d.add_argument("--ask-id", dest="ask_id", default="", help="主人答应后拿到的那张许可")
+    d.add_argument("--no-ocr", action="store_true", help="observe 时不做 OCR")
+    d.add_argument("--before", action="store_true", help="动作前也截一张（拿来对比）")
     d.add_argument("--double", action="store_true")
     d.add_argument("--what")
     d.add_argument("--not-owner", action="store_true", help="模拟非主人会话（验闸用）")

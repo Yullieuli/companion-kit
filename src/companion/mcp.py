@@ -104,7 +104,8 @@ TOOLS: list[Tool] = [
             {"who": {"type": "string", "description": "owner 或名字"},
              "fact": {"type": "string"}, "relation": {"type": "string"},
              "closeness": {"type": "integer"}, "notes": {"type": "string"}}),
-    _schema("companion_cost", "今天花了多少 / 预算还剩多少。"),
+    _schema("companion_cost", "今天花了多少 / 预算还剩多少；给 task 就返回这个任务该用哪个档的模型。",
+            {"task": {"type": "string", "description": "bili_pick / bili_debrief / chat ..."}}),
     _schema("companion_voice", "合成一段语音（本地 TTS），返回文件路径。sing=true 是降级版「唱」。",
             {"text": {"type": "string"}, "sing": {"type": "boolean", "default": False}}, ["text"]),
     _schema("companion_ask", "她动手前的请示：list 看待答应的 / allow 答应 / deny 拒绝。答应后动作要用 ask_id 重试。",
@@ -120,15 +121,20 @@ TOOLS: list[Tool] = [
              "reason": {"type": "string"}, "to_mid": {"type": "integer"},
              "via": {"type": "string"}, "frames": {"type": "boolean"},
              "force": {"type": "boolean"}}, []),
-    _schema("device_look", "看屏幕：截图并返回路径与前台窗口。target 选 phone/desktop/browser/game。",
-            {"target": {"type": "string", "enum": ["phone", "desktop", "browser", "game"], "default": "desktop"}}),
+    _schema("device_look",
+            "看屏幕：截图 + 前台/窗口信息。给了 window 就只抓那个窗口（被盖住也能抓）；"
+            "ocr=true 会先本地读图上的字（没装引擎时返回 backend=none，让视觉模型读图）。",
+            {"target": {"type": "string", "enum": ["phone", "desktop", "browser", "game"], "default": "desktop"},
+             "window": {"type": "string", "description": "窗口标题片段"},
+             "ocr": {"type": "boolean", "default": False}}),
     _schema("device_act", "在屏幕上做一个动作（点/滑动/打字/按键/切窗口），返回执行后的截图。危险动作会被拒。",
             {"target": {"type": "string", "enum": ["phone", "desktop", "browser", "game"]},
              "action": {"type": "string", "enum": ["tap", "click", "swipe", "type", "key", "focus"]},
              "x": {"type": "integer"}, "y": {"type": "integer"},
              "x2": {"type": "integer"}, "y2": {"type": "integer"},
              "text": {"type": "string"}, "key": {"type": "string"}, "window": {"type": "string"},
-             "double": {"type": "boolean"}, "ask_id": {"type": "string"}},
+             "double": {"type": "boolean"}, "ask_id": {"type": "string"},
+             "before": {"type": "boolean", "description": "动作前也截一张"}},
             ["target", "action"]),
     _schema("device_open", "打开一个 App / 网址 / 程序（走白名单）。可能需要先请示（会返回 ask）。",
             {"target": {"type": "string", "enum": ["phone", "desktop", "browser", "game"]},
@@ -316,7 +322,10 @@ def _t_person(home: Home, a: dict[str, Any]) -> dict[str, Any]:
 
 
 def _t_cost(home: Home, a: dict[str, Any]) -> dict[str, Any]:
-    return {"ok": True, "today_cny": round(cost.today_total(home), 4), "summary": cost.summary(home)}
+    if a.get("task"):
+        return {"ok": True, "route": cost.route(str(a["task"]), home)}
+    return {"ok": True, "today_cny": round(cost.today_total(home), 4), "summary": cost.summary(home),
+            "routes": cost.route_table(home)}
 
 
 def _t_voice(home: Home, a: dict[str, Any]) -> dict[str, Any]:
@@ -359,13 +368,18 @@ def _t_bili(home: Home, a: dict[str, Any]) -> dict[str, Any]:
 
 
 def _t_look(home: Home, a: dict[str, Any]) -> dict[str, Any]:
-    return device.look(home, a.get("target") or "desktop")
+    target = a.get("target") or "desktop"
+    window = a.get("window") or ""
+    if a.get("ocr"):
+        return device.observe(home, target, window=window, ocr=True)
+    return device.look(home, target, window=window)
 
 
 def _t_act(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     args = {k: a[k] for k in ("x", "y", "x2", "y2", "text", "key", "window", "double") if k in a}
     return device.act(home, a["target"], a["action"], args,
-                      is_owner=bool(a.get("is_owner", True)), ask_id=a.get("ask_id") or "")
+                      is_owner=bool(a.get("is_owner", True)), ask_id=a.get("ask_id") or "",
+                      before=bool(a.get("before")))
 
 
 def _t_open(home: Home, a: dict[str, Any]) -> dict[str, Any]:

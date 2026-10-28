@@ -91,6 +91,7 @@ companion status                        # 只读：心情、额度、作息、�
 companion tick                          # 问一次"现在想干什么"（零 token）
 companion events --wait 30              # 等一次 wake_due
 companion cost                          # 今天花了多少
+companion cost bili_debrief             # 这件事该用哪个档的模型、约多少钱
 
 companion memory write --title 影之刃零 --body "..." --summary "一句话" --tags 游戏 设计
 companion memory search 游戏            # 标签 > 摘要 > 正文，越近越靠前
@@ -102,6 +103,8 @@ companion device look --target desktop   # 截图 + 前台窗口 + 可见窗口�
 companion device act --target phone --act tap --x 540 --y 1200
 companion device act --target desktop --act swipe --x 600 --y 400 --x2 600 --y2 900
 companion device act --target desktop --act key --key ctrl+s
+companion device observe --target desktop --window 记事本   # 窗口级截图 + 本地 OCR
+companion device act --target desktop --act key --key ctrl+s --before
 companion device list                    # 可见窗口（按面积排）
 companion device focus --what 记事本      # 切到某个窗口（走窗口白名单）
 companion ask list                      # 她想开程序/切窗口，正在等你答应
@@ -122,7 +125,7 @@ companion bili share BV1xx411c7mD --score 15 --reason "他肯定喜欢这个战�
 companion mcp --list                    # 列出 25 个 MCP 工具
 ```
 
-**223 个单测**，全部离线可跑（B 站用假总线，不碰网络）。其中 9 个是契约/回放：
+**234 个单测**，全部离线可跑（B 站用假总线，不碰网络）。其中 9 个是契约/回放：
 CLI、MCP、直接调用三方拼出的上下文必须逐字节一致，真实一轮的注入能按当时的时钟重建。
 
 | 层 | 做了什么 |
