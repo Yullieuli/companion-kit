@@ -51,6 +51,7 @@ def react(
     life_event: dict[str, Any] | None = None,
     said: str = "",
     cost: dict[str, Any] | None = None,
+    context: dict[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now()
@@ -131,6 +132,13 @@ def react(
         "said": said[:400],
         "changed": changed,
         "cost": cost or {},
+        # 注入了什么也要留档：没有这一份，回放测试就无从谈起
+        "context": {
+            "now": (context or {}).get("now") or "",
+            "total_chars": int((context or {}).get("total_chars") or 0),
+            "blocks": [{"name": b.get("name"), "hash": b.get("hash"), "chars": b.get("chars")}
+                       for b in ((context or {}).get("blocks") or [])],
+        } if context else {},
     })
 
     out["changed"] = changed

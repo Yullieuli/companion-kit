@@ -48,7 +48,9 @@ TOOLS: list[Tool] = [
              "memory": {"type": "object", "description": "{title, summary, body, tags}；summary 必填"},
              "opinion": {"type": "object", "description": "{claim, tags, confidence}；她自己的判断"},
              "life": {"type": "object", "description": "{title, kind, detail, tags, shared}；她生活里发生的事"},
-             "said": {"type": "string", "description": "这一轮她说出口的话，用于回看与去重"}}),
+             "said": {"type": "string", "description": "这一轮她说出口的话，用于回看与去重"},
+             "context": {"type": "object",
+                         "description": "这一轮 companion_context 的返回值（原样传回），用于回放测试"}}),
     _schema("companion_opinion", "她的判断清单：看、加一条、被验证了、被反驳了。",
             {"action": {"type": "string", "enum": ["list", "add", "reinforce", "weaken", "stats"], "default": "list"},
              "claim": {"type": "string"}, "id": {"type": "string"},
@@ -133,8 +135,12 @@ TOOLS: list[Tool] = [
 
 # ── 工具实现 ────────────────────────────────────────────────
 def _t_context(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    from datetime import datetime as _dt
+
+    pinned = a.get("now")
     ctx = context_mod.build(
         home,
+        now=_dt.fromisoformat(str(pinned)) if pinned else None,
         budget=int(a.get("budget") or 2000),
         memory_text=memory.render(home, a.get("query") or ""),
         opinion_text=opinion.render(home, a.get("query") or ""),
@@ -155,6 +161,7 @@ def _t_react(home: Home, a: dict[str, Any]) -> dict[str, Any]:
         opinion_item=a.get("opinion") or None,
         life_event=a.get("life") or None,
         said=a.get("said") or "",
+        context=a.get("context") or None,
     )
 
 

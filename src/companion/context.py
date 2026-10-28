@@ -39,12 +39,15 @@ class Block:
 class Context:
     text: str
     blocks: list[Block] = field(default_factory=list)
+    # 回放要用：记下这一份是用哪个时刻拼的，否则重建时「【现在】」那一行对不上
+    now: datetime | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "text": self.text,
             "blocks": [{"name": b.name, "chars": len(b.text), "hash": b.hash} for b in self.blocks],
             "total_chars": len(self.text),
+            "now": self.now.isoformat(timespec="seconds") if self.now else "",
         }
 
 
@@ -134,7 +137,7 @@ def build(
     order = {"soul": 0, "state": 1, "memory": 2, "opinion": 3, "person": 4, "life": 5}
     kept.sort(key=lambda x: order.get(x.name, 99))
     parts = [b.text for b in kept]
-    return Context(text="\n\n".join(parts), blocks=kept)
+    return Context(text="\n\n".join(parts), blocks=kept, now=now)
 
 
 @dataclass

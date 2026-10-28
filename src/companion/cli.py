@@ -54,6 +54,7 @@ def cmd_init(home: Home, args) -> int:
 def cmd_context(home: Home, args) -> int:
     ctx = context_mod.build(
         home,
+        now=datetime.fromisoformat(args.now) if getattr(args, "now", "") else None,
         budget=args.budget,
         include_soul=not args.no_soul,
         memory_text=memory.render(home, args.query or ""),
@@ -493,6 +494,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--budget", type=int, default=2000)
     c.add_argument("--query", help="按话题挑记忆（不给就取最近的）")
     c.add_argument("--no-soul", action="store_true", help="不注入人格块（宿主自己有人格时用）")
+    c.add_argument("--now", help="钉住时间（回放/契约测试用，ISO 格式）")
 
     t = sub.add_parser("tick", help="问一次该干什么")
     t.add_argument("--emit-silent", action="store_true")
