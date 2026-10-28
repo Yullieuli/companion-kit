@@ -82,6 +82,11 @@ class TickTest(unittest.TestCase):
         self.assertNotIn(r["action"], ("speak", "voice", "sing", "share"))
         self.assertEqual(self.home.quota()["count"], 1)
 
+    def test_bili_outside_window_is_not_chosen(self):
+        # 作息窗口是 20:00-24:00，下午三点不该去刷视频
+        r = drive.tick(self.home, now=datetime(2026, 10, 28, 15, 0), host="test")
+        self.assertNotEqual(r["action"], "bili")
+
     def test_budget_exhausted_blocks_speaking(self):
         self.home.save_json("quota.json", quota.default_state("2026-10-27"))
         r = drive.tick(self.home, now=T0, budget={"daily_cny": 0.0}, emit_silent=True)

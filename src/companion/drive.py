@@ -112,6 +112,9 @@ def tick(
     b = {**cost.DEFAULT_BUDGET, **(budget or {})}
     remaining = max(0.0, float(b["daily_cny"]) - spent)
     bili_ok, bili_why, bili_pending = _bili_state(home, now)
+    # 刷片只在作息窗口内（SPEC 5.8）。窗口外她该休息，不是换个方式熬夜。
+    if bili_ok and not clock.in_window(rhythm, now):
+        bili_ok, bili_why = False, "不在作息窗口"
 
     situation = initiative.Situation(
         now=now,
