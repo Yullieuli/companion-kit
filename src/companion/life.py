@@ -99,6 +99,43 @@ def mark_shared(home: Home, ids: list[str]) -> int:
     return n
 
 
+def _lcs(a: str, b: str) -> int:
+    """最长公共子串长度。O(len(a)*len(b))，两边都在几十字量级，够用。"""
+    a, b = str(a or ""), str(b or "")
+    if not a or not b:
+        return 0
+    best = 0
+    prev = [0] * (len(b) + 1)
+    for ch in a:
+        cur = [0] * (len(b) + 1)
+        for j, c2 in enumerate(b, 1):
+            if ch == c2:
+                cur[j] = prev[j - 1] + 1
+                if cur[j] > best:
+                    best = cur[j]
+        prev = cur
+    return best
+
+
+def match_shared(home: Home, said: str, *, days: float = 2, min_common: int = 3) -> list[str]:
+    """她说了一句话，判断这句话讲的是哪几件「还没跟他说」的事。
+
+    判据是**最长公共子串 ≥ 3 字**，不是词频重叠：
+    标题往往是一长串（"刷B站热门，下载了'双人抬棺'…抽帧九宫格…"），
+    按比例算阈值会高到永远匹配不上；而「双人抬棺」「极客湾」这种专名正好 3–4 字（定 4 会漏掉「极客湾」这类三字名）。
+    一件都匹配不上就返回空——宁可下次再讲，也不要把没讲过的标成讲过了。
+    """
+    said = str(said or "")
+    if len(said) < 4:
+        return []
+    hits: list[str] = []
+    for r in unshared(home, days=days):
+        title = str(r.get("title", ""))
+        if _lcs(title, said) >= min_common:
+            hits.append(str(r.get("id")))
+    return hits
+
+
 def ago(epoch: float, now: datetime | None = None) -> str:
     now = now or datetime.now()
     d = max(0.0, now.timestamp() - float(epoch or 0))

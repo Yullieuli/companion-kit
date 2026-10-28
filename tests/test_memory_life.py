@@ -152,5 +152,29 @@ class LifeTest(unittest.TestCase):
         self.assertEqual(life.recent(self.home, days=2), [])
 
 
+    def test_match_shared_by_title_overlap(self):
+        from companion.life import match_shared
+        a = life.record(self.home, "看完极客湾旗舰手机芯片大横评", kind="watch")
+        life.record(self.home, "刷到双人抬棺那个协作游戏", kind="watch")
+        hits = match_shared(self.home, "刚看了极客湾那个芯片横评，能效曲线才是重点")
+        self.assertEqual(hits, [a["id"]])
+
+    def test_match_shared_returns_empty_when_unrelated(self):
+        from companion.life import match_shared
+        life.record(self.home, "看完极客湾旗舰手机芯片大横评", kind="watch")
+        self.assertEqual(match_shared(self.home, "今天天气不错，出去走了走"), [])
+
+    def test_match_shared_handles_long_titles(self):
+        """真实标题往往一长串，按比例算阈值会高到匹配不上。"""
+        from companion.life import match_shared
+        a = life.record(
+            self.home,
+            "刷B站热门，下载了'双人抬棺'（Fallbearers，Z贤者），抽帧九宫格两张看清黑白哥特手绘、双人协作抬棺物理机制、葬礼NPC围观",
+            kind="watch",
+        )
+        hits = match_shared(self.home, "本公主昨晚看的那个双人抬棺，两个人各压一边棺材往墓地挪")
+        self.assertEqual(hits, [a["id"]])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
