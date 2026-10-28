@@ -33,15 +33,33 @@ RENAME_PATTERNS = [
 
 
 def _recent_said(home: Home, minutes: float, now: datetime) -> list[dict[str, Any]]:
+    """最近说过的话。两个来源都要读：
+
+    · `said.jsonl` —— 经过 `say` 出口说的话（带 channel/source）
+    · `turns.jsonl` —— 宿主钩子记下的她的话。hermes 不经过 `say`，
+      只读 said 的话，这里永远是空的，"别重复"的提示等于没写。
+
+    以前只读第一处，所以 hermes 路径上这条提示是死代码。
+    """
     cut = now - timedelta(minutes=max(0.0, minutes))
-    out: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for r in home.read_jsonl("logs/said.jsonl", limit=200):
+        rows.append({**r, "_src": "said"})
+    for r in home.read_jsonl("logs/turns.jsonl", limit=300):
+        if str(r.get("role")) != "assistant":
+            continue
+        said = str(r.get("said") or "").strip()
+        if said:
+            rows.append({"at": r.get("at"), "text": said, "_src": "turn"})
+    out: list[dict[str, Any]] = []
+    for r in rows:
         try:
             at = datetime.fromisoformat(str(r.get("at")))
         except Exception:
             continue
         if at >= cut:
             out.append(r)
+    out.sort(key=lambda r: str(r.get("at") or ""))
     return out
 
 

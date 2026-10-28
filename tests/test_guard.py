@@ -127,6 +127,47 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class RecentSaidFallbackTest(unittest.TestCase):
+    """hermes 不经过 say：只读 said.jsonl 的话，"别重复"提示永远不触发。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_reads_turn_log_when_said_is_empty(self):
+        self.home.append_jsonl("logs/turns.jsonl", {
+            "at": NOW.isoformat(timespec="seconds"), "role": "assistant",
+            "said": "这个战斗系统的节奏感真的很好",
+        })
+        got = guard.recent_said(self.home, minutes=10, now=NOW + timedelta(minutes=1))
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["_src"], "turn")
+        dup = guard.same_topic(self.home, "这个战斗系统的节奏感真的很不错",
+                               now=NOW + timedelta(minutes=2))
+        self.assertTrue(dup["dup"])
+
+    def test_user_turns_are_not_counted(self):
+        self.home.append_jsonl("logs/turns.jsonl", {
+            "at": NOW.isoformat(timespec="seconds"), "role": "user", "chars": 3,
+        })
+        self.assertEqual(guard.recent_said(self.home, now=NOW), [])
+
+    def test_merges_both_sources_in_time_order(self):
+        self.home.append_jsonl("logs/said.jsonl", {
+            "at": (NOW - timedelta(minutes=5)).isoformat(timespec="seconds"),
+            "text": "第一句", "source": "say",
+        })
+        self.home.append_jsonl("logs/turns.jsonl", {
+            "at": NOW.isoformat(timespec="seconds"), "role": "assistant", "said": "第二句",
+        })
+        got = guard.recent_said(self.home, minutes=10, now=NOW + timedelta(minutes=1))
+        self.assertEqual([r["text"] for r in got], ["第一句", "第二句"])
+
+
 class PendingTicketTest(unittest.TestCase):
     """决策时记的账，开口时不能再记一次。"""
 

@@ -10,8 +10,8 @@
 
 | # | 项 | 证据 | 结论 |
 |---|---|---|---|
-| 1 | 全量单测（Windows） | `python -m unittest discover -s tests -q` → `Ran 345 tests ... OK` | ✅ |
-| 2 | 全量单测（Linux） | WSL 同一命令 → `Ran 345 tests ... OK` | ✅ 同一份代码双平台绿 |
+| 1 | 全量单测（Windows） | `python -m unittest discover -s tests -q` → `Ran 348 tests ... OK` | ✅ |
+| 2 | 全量单测（Linux） | WSL 同一命令 → `Ran 348 tests ... OK` | ✅ 同一份代码双平台绿 |
 | 3 | MCP 协议（真子进程） | `tests/test_mcp_protocol.py` 5 例：握手协商 `2025-06-18`、26 工具、未知工具 `-32601`、坏 JSON `-32700`、通知不回包 | ✅ |
 | 4 | MCP 在 GBK 环境下的编码 | 以 `PYTHONIOENCODING=gbk` 起进程，stdout 仍是合法 UTF-8 JSON（修复前解不开） | ✅ |
 | 5 | 真实 MCP 客户端 | `openclaw mcp add companion-probe --command .../companion --arg mcp` → `26 tools, Codex approval auto`，注解齐全无警告 | ✅ |
@@ -46,7 +46,7 @@
 | 被回应结账 | `initiative/feedback.json` 有 `last_at`、`settled=0`，还没遇到 TO_OWNER 动作 | 她主动说话后 6 小时内你回一句，`settled` +1 |
 | codex 本体 | 本机没装 codex；用 openclaw（同一套 MCP）代验协议 | `codex mcp` 里能看到 26 个工具 |
 | dsh 桌面端 | 没装 | 装上后 `/dsh-companion/status` 有返回、tick 能投递 |
-| Docker | 镜像拉不下来 | `docker run` 里 345 测试绿 + `companion doctor` 正常 |
+| Docker | 镜像拉不下来 | `docker run` 里 348 测试绿 + `companion doctor` 正常 |
 
 ## 四、模块之间会不会互相干扰 / 重复消耗
 
@@ -87,7 +87,8 @@
 7. **Linux 上单测红**：测试少 patch 了 `screen_origin`；顺带修掉
 8. **doctor 的假 ✓**：非 Windows 上 `devwin` 导入成功就打 ✓ → 现在会标"仅 Windows，本机调用会报错"
 9. **B 站空 store 说"可以刷"**：没凭证时 `due=true` → 现在 `logged_in=false` + 明确说缺凭证，drive 也不再把刷片排进候选
-10. **死配置**：`pyproject` 声明了不存在的 `templates/*.md` → 删掉
+10. **"别重复"提示在 hermes 上是死代码**：它只读 `said.jsonl`，而 hermes 不经过 `say` → 现在同时读 `turns.jsonl`（钩子写的那份）
+11. **死配置**：`pyproject` 声明了不存在的 `templates/*.md` → 删掉
 
 ## 七、剩余待办（按阻断程度）
 
