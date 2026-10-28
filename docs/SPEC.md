@@ -1,6 +1,6 @@
 # 规格：companion-kit（跨 agent 的伴侣运行时）
 
-> 状态：**实施中**（0.4.1）。逐项完成情况见 §12。
+> 状态：**实施中**（0.4.2）。逐项完成情况见 §12。
 > 目标读者：未来的我、以及任何要接手这套东西的人。
 
 ## 1. 一句话
@@ -91,6 +91,11 @@ GET /context?session=xxx&channel=qq:group:123&budget=2500
 5. 生活事件（近 24h，未反应优先）
 
 **投影去重**：每块算 hash，宿主侧缓存；未变化不重复注入（省 token 的关键）。
+
+**编年史只有一本（10-28 起）**：写入统一走 `life/life.jsonl`。旧的
+`~/.hermes/proactive/life.jsonl` 降级成**只读投影**——`life.py record` 先写 companion，
+再把同一行追加到旧文件，供 pulse / said / status 这些还没迁移的读者继续读。
+投影丢了不影响她，账本丢一条就是真的丢了一条。
 
 ### 5.3 事件订阅（给调度器）
 
@@ -325,7 +330,7 @@ MCP 工具（三个，不拆细）：
 | §5.1 MCP 工具 | ✅ | 规格 8 个全部覆盖（context / life / card / wake / say / react / mood / bili）；对外 25 个工具 |
 | §5.2 Context 注入 | 🟡 | 五块（+ 观点共六块）、优先级、预算、块 hash 都在；**投影去重（`context.Cache`）尚无宿主调用** |
 | §5.3 事件订阅 | 🟡 | append-only + cursor + 长轮询 ✅；`wake_due` / `spend_guard` / `mood_shift` 都会发；**HTTP `/events` ❌** |
-| §5.4 文件协议 | 🟡 | 结构与规格有两处偏差：`people/*.json`（规格为 `.md`）、`life/life.jsonl`（规格为按日目录）。`opinions.jsonl` ✅、`bili/*`（配置/状态/额度/凭证）✅ |
+| §5.4 文件协议 | 🟡 | 结构与规格有两处偏差：`people/*.json`（规格为 `.md`）、`life/life.jsonl`（规格为按日目录）。`opinions.jsonl` ✅、`bili/*` ✅。**编年史已收成一本**：`life/life.jsonl` 是唯一账本，旧 `proactive/life.jsonl` 降级为只读投影（迁移期给老读者看） |
 | §5.5 设备控制 | 🟡 | 四类目标 + Screen/Input 双 port ✅，五道闸 + `ask` 请示闸 ✅；`swipe`/`key`（桌面 SendInput + 浏览器 CDP）✅、窗口列表/切前台 ✅、游戏前台校验 + 坐标换算 ✅；**缺** `Observe(ocr/describe)` 与窗口级截图；`device_act` 只回执行后一张图 |
 | §5.6 语音 | 🟡 | TTS ✅、唱歌降级版 ✅、边界闸 ✅；SVC ❌（明确 P3） |
 | §5.7 成本 | 🟡 | 前缀分层 / 事件门 / 本地先做 / 预算闸 ✅；块级去重未接线、分级模型只有价格表无任务映射 |
@@ -340,4 +345,4 @@ MCP 工具（三个，不拆细）：
 2. 分级模型的任务→模型映射
 3. `people/*.json` → `.md`、`life` 按日目录（§5.4 的两处偏差）
 4. §5.6 P3：真 SVC 唱歌（需要音色模型与显存）
-5. 旧 `proactive/life.jsonl` 账本停产（现在还有 free-time/diary 在写，companion 只读它做去重）
+5. ~~旧 `proactive/life.jsonl` 账本停产~~ ✅（10-28：改为 companion 先写、旧文件只做投影；`legacy_life` 去重桥已撤）

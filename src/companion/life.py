@@ -61,7 +61,11 @@ def record(
         "shared": bool(shared),
     }
     if extra:
-        row.update(extra)
+        # extra 只允许加字段，不许覆盖身份与语义字段。
+        # 踩过：外部把 bvid 写成 id，整条记录的主键被顶掉，之后按 id 回填全部失效。
+        for k, v in extra.items():
+            if k not in ("id", "at", "epoch", "kind", "title", "shared"):
+                row[k] = v
     # 同一分钟同一标题视为重复，不写
     for old in home.read_jsonl(FILE, limit=20):
         if old.get("id") == row["id"]:

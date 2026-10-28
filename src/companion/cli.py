@@ -166,8 +166,14 @@ def cmd_memory(home: Home, args) -> int:
 
 def cmd_life(home: Home, args) -> int:
     if args.action == "add":
+        extra: dict[str, str] = {}
+        for kv in getattr(args, "extra", None) or []:
+            k, _, v = str(kv).partition("=")
+            if k.strip():
+                extra[k.strip()] = v.strip()
         row = life.record(home, args.title, kind=args.kind, detail=args.detail or "",
-                          tags=args.tags or [], shared=args.shared)
+                          tags=args.tags or [], shared=args.shared,
+                          at=_parse_when(getattr(args, "at", None)), extra=extra or None)
         _dump(row if args.json else f"记下了：{row['at']} {row['title']}", args.json)
     elif args.action == "unshared":
         rows = life.unshared(home)
@@ -176,6 +182,21 @@ def cmd_life(home: Home, args) -> int:
         rows = life.recent(home, days=args.days, limit=args.limit)
         _dump(rows if args.json else (life.render(home, days=args.days, limit=args.limit) or "（这几天什么都没做）"), args.json)
     return 0
+
+
+def _parse_when(raw: str | None) -> datetime | None:
+    """接受 'YYYY-MM-DD HH:MM'、ISO、或空。迁移脚本传的是前者。"""
+    if not raw:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(str(raw), fmt)
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(str(raw))
+    except ValueError:
+        raise SystemExit(f"时间格式不认识：{raw}")
 
 
 def cmd_person(home: Home, args) -> int:
@@ -548,6 +569,9 @@ def build_parser() -> argparse.ArgumentParser:
     lf.add_argument("--shared", action="store_true")
     lf.add_argument("--days", type=float, default=2)
     lf.add_argument("--limit", type=int, default=8)
+    lf.add_argument("--at", help="记录时间（迁移/回填用，'YYYY-MM-DD HH:MM' 或 ISO）")
+    lf.add_argument("--extra", action="append", default=[], metavar="K=V",
+                    help="附加字段，可重复：--extra progress=08:30/25:42 --extra bvid=BV1xx")
 
     pe = sub.add_parser("person", help="人物卡")
     pe.add_argument("action", choices=["get", "learn", "list"], nargs="?", default="get")

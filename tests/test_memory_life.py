@@ -124,6 +124,14 @@ class LifeTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_extra_cannot_clobber_identity(self):
+        # 外部（hermes 的 life.py）会把 bvid 传进来。传错名不能把主键顶掉，
+        # 否则之后按 id 回填、按 id 标记已讲，全都失效。
+        row = life.record(self.home, "看完了", extra={"id": "BV1xx411c7mD", "bvid": "BV1xx411c7mD"})
+        self.assertNotEqual(row["id"], "BV1xx411c7mD")
+        self.assertEqual(len(row["id"]), 12)
+        self.assertEqual(row["bvid"], "BV1xx411c7mD")
+
     def test_record_and_dedupe(self):
         at = datetime(2026, 10, 27, 20, 31)
         a = life.record(self.home, "看完一部片子", kind="watch", at=at)

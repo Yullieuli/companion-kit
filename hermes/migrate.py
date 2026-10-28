@@ -114,10 +114,17 @@ def main() -> int:
             report["skipped"] += 1
             continue
         seen_life.add(life._id(at, text))
+        # 旧账本里这几个字段只在它那边有：id 是 BV 号，progress 是看到哪了。
+        # 不带过来，她就"忘了自己看到哪"，pulse 也找不回没看完的东西。
+        extra = {}
+        for src_key, dst_key in (("id", "bvid"), ("progress", "progress"), ("mood", "mood")):
+            if r.get(src_key):
+                extra[dst_key] = str(r[src_key])
+        tags = [t.strip() for t in str(r.get("tags") or "").replace("，", ",").split(",") if t.strip()]
         if args.dry_run:
-            print(f"[life] {at:%Y-%m-%d %H:%M} {kind} {text[:40]}")
+            print(f"[life] {at:%Y-%m-%d %H:%M} {kind} {text[:40]} {extra or ''}")
         else:
-            life.record(home, text, kind=kind, at=at)
+            life.record(home, text, kind=kind, at=at, tags=tags, extra=extra or None)
         report["life"] += 1
 
     # ── opinions ──
