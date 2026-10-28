@@ -30,10 +30,13 @@ DEFAULT_BUDGET = {"daily_cny": 3.0, "warn_at": 0.8}
 # 同一个"想"，花多少钱差三倍。所以不是所有活都配得上贵的模型：
 # 判一次"该不该说话"、"这条视频几分"，用最便宜的就行；
 # 深读长文、写日记、需要推理的，才升档。
+# 2026-10-28：三档先全部用 agnes-3.0-flash（她实际在跑的那个）。
+# 档位仍然保留，因为它决定**估价**：同样一个模型，读一条视频和判一次"该不该说话"
+# 的 token 量差五倍。想升档时改 store 里的 cost/route.json，不用动代码。
 TIERS: dict[str, dict[str, str]] = {
     "cheap": {"model": "agnes-3.0-flash", "why": "只判一次、要的是快不是文采"},
-    "work": {"model": "deepseek-v4.1-flash", "why": "日常对话与工具调用，够用且便宜"},
-    "deep": {"model": "deepseek-v4.1", "why": "深读/长文/需要真的想一遍"},
+    "work": {"model": "agnes-3.0-flash", "why": "日常对话与工具调用（当前统一用这个）"},
+    "deep": {"model": "agnes-3.0-flash", "why": "深读/长文；预算够时可在 route.json 换成更强的"},
 }
 
 # 任务 → 档位。改这里比改调用点安全：调用点只写任务名。
@@ -102,7 +105,7 @@ def cost_cny(
     fresh_tokens: int,
     cached_tokens: int,
     output_tokens: int,
-    model: str = "deepseek-v4.1-flash",
+    model: str = "agnes-3.0-flash",
     prices: dict[str, dict[str, float]] | None = None,
 ) -> float:
     p = price_of(model, prices)
@@ -137,7 +140,7 @@ def record_turn(
     home,
     *,
     now: datetime | None = None,
-    model: str = "deepseek-v4.1-flash",
+    model: str = "agnes-3.0-flash",
     fresh_tokens: int = 0,
     cached_tokens: int = 0,
     output_tokens: int = 0,

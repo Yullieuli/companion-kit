@@ -40,9 +40,17 @@ class LedgerTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_record_and_total(self):
-        cost.record_turn(self.home, now=T0, fresh_tokens=20000, output_tokens=600)
-        cost.record_turn(self.home, now=T0, fresh_tokens=10000, output_tokens=300)
+        # 显式给模型：这条测的是算术，不该被"默认模型改成谁"带跑
+        cost.record_turn(self.home, now=T0, model="deepseek-v4.1-flash",
+                         fresh_tokens=20000, output_tokens=600)
+        cost.record_turn(self.home, now=T0, model="deepseek-v4.1-flash",
+                         fresh_tokens=10000, output_tokens=300)
         self.assertAlmostEqual(cost.today_total(self.home, T0), 0.0448 + 0.0224, places=4)
+
+    def test_default_model_is_the_one_she_runs(self):
+        # 默认跟着她实际在跑的模型走，否则记账金额会系统性偏离账单
+        row = cost.record_turn(self.home, now=T0, fresh_tokens=1_000_000)
+        self.assertEqual(row.get("model"), "agnes-3.0-flash")
 
     def test_only_today_counts(self):
         cost.record_turn(self.home, now=datetime(2026, 10, 26, 9, 0), fresh_tokens=20000, output_tokens=600)

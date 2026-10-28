@@ -1,3 +1,3 @@
 """companion-kit：跨 agent 的伴侣运行时。"""
 
-__version__ = "0.5.2"
+__version__ = "0.6.0"

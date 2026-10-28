@@ -261,6 +261,7 @@ def cmd_react(home: Home, args) -> int:
         life_event=payload.get("life") or (
             {"title": args.life, "kind": args.life_kind, "detail": args.life_detail or ""} if args.life else None),
         said=args.said or payload.get("said", ""),
+        context=payload.get("context") or None,
     )
     _dump(out if args.json else json.dumps(out, ensure_ascii=False, indent=2), args.json)
     return 0

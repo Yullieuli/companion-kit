@@ -60,6 +60,85 @@ def _note(line: str) -> None:
         pass
 
 
+SAID_STATE = "logs/.hook_said.json"
+
+
+def _msg_text(raw) -> str:
+    """从 history 里抠出正文。hermes 的消息体可能是 str，也可能是 parts 列表。"""
+    if isinstance(raw, dict):
+        inner = raw.get("content")
+        return _msg_text(inner) if inner is not None else str(raw.get("text") or "")
+    if isinstance(raw, list):
+        parts = []
+        for part in raw:
+            if isinstance(part, dict):
+                if part.get("type") in (None, "text"):
+                    parts.append(str(part.get("text") or part.get("content") or ""))
+            elif isinstance(part, str):
+                parts.append(part)
+        return " ".join(x for x in parts if x)
+    return str(raw or "")
+
+
+def _last_assistant(history) -> str:
+    """这一轮之前她说的最后一句。pre_llm_call 拿得到完整历史，所以不用等 post 钩子。"""
+    if not isinstance(history, list):
+        return ""
+    for msg in reversed(history):
+        role = str((msg or {}).get("role") or "").lower() if isinstance(msg, dict) else ""
+        if role in ("assistant", "model"):
+            text = _msg_text(msg).strip()
+            if text:
+                return text
+    return ""
+
+
+def _said_state(home) -> list[str]:
+    import json as _json
+
+    try:
+        d = _json.loads((home.root / SAID_STATE).read_text(encoding="utf-8"))
+        return [str(x) for x in d if isinstance(x, str)][-40:]
+    except Exception:
+        return []
+
+
+def _record_turn(home, said: str, ctx: dict, turn: str, platform: str) -> None:
+    """把她说的话写回 companion（零 token：一次本地子进程，不调模型）。
+
+    为什么放在 pre_llm_call：hermes 没有 post_response 钩子，但这里能拿到完整历史，
+    所以"上一句"是确定的。用 (turn_id + 正文) 的哈希去重，工具循环里不会记多遍。
+    """
+    import hashlib
+    import json as _json
+    import subprocess
+
+    if not said or said.startswith("[SILENT]"):
+        return
+    digest = hashlib.sha1(f"{turn}|{said}".encode("utf-8")).hexdigest()[:16]
+    seen = _said_state(home)
+    if digest in seen:
+        return
+    payload = {"said": said[:1500], "why": "hermes 钩子自动记录", "context": ctx}
+    tmp = home.root / "logs" / ".react_payload.json"
+    try:
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(_json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        done = subprocess.run(
+            [sys.executable, "-m", "companion", "--json", "react", "--from", str(tmp)],
+            capture_output=True, text=True, timeout=5,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+        if done.returncode != 0:
+            _note(f"react-fail {done.returncode}: {(done.stderr or '')[:120]}")
+            return
+        seen.append(digest)
+        (home.root / SAID_STATE).write_text(_json.dumps(seen[-40:]), encoding="utf-8")
+        _note(f"react-said {len(said)}c platform={platform}")
+    except Exception as e:
+        _note(f"react-error {type(e).__name__}: {e}")
+
+
 def _empty(reason: str = "") -> int:
     """没有可注入的东西时必须打印 {} —— 与 said.py 保持同一协议。"""
     _note(f"skip {reason}")
@@ -96,15 +175,29 @@ def main() -> int:
 
     # 记一笔"主人最后说话时间"：沉默衰减（3 天降额、7 天归零）靠它。
     # 不记的话 companion 永远以为他刚说过话，衰减机制等于没开。
+    # 按 (turn_id + 正文) 去重：一次用户消息会触发多次 LLM 调用（工具循环），
+    # 不去重的话 turns 会被同一条消息刷满，`_owner_last_seen` 也会被推到现在。
     if user_text.strip():
         try:
+            import hashlib
             from datetime import datetime
 
-            home.append_jsonl("logs/turns.jsonl", {
-                "at": datetime.now().isoformat(timespec="seconds"),
-                "role": "user", "platform": platform, "chars": len(user_text),
-                "session": session[:32],
-            })
+            udigest = hashlib.sha1(
+                f"u|{payload.get('turn_id') or ''}|{user_text}".encode("utf-8")).hexdigest()[:16]
+            marker = home.root / "logs" / ".hook_user"
+            last = ""
+            try:
+                last = marker.read_text(encoding="utf-8").strip()
+            except Exception:
+                pass
+            if udigest != last:
+                home.append_jsonl("logs/turns.jsonl", {
+                    "at": datetime.now().isoformat(timespec="seconds"),
+                    "role": "user", "platform": platform, "chars": len(user_text),
+                    "session": session[:32],
+                })
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.write_text(udigest, encoding="utf-8")
         except Exception:
             pass
 
@@ -123,6 +216,13 @@ def main() -> int:
     except Exception as e:
         print(json.dumps({"warn": f"上下文构建失败：{e}"}, ensure_ascii=False))
         return 0
+
+    # 先把她上一句写回去（读侧是注入，写侧是这里），再注入
+    try:
+        said = _last_assistant(payload.get("conversation_history"))
+        _record_turn(home, said, ctx.as_dict(), str(payload.get("turn_id") or ""), platform)
+    except Exception as e:
+        _note(f"record-skip {type(e).__name__}: {e}")
 
     if not text:
         return _empty("empty-context")
