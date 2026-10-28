@@ -29,6 +29,9 @@ def default_state(today: str | None = None) -> dict[str, Any]:
         "count": 0,
         "last_at": 0.0,
         "last_reason": "",
+        # 除"主动开口"之外还有别的额度：刷片、分享。它们和说话一样是每天限量的，
+        # 但没有 45 分钟间隔这一说。放在同一本 quota.json 里，跨天一起归零。
+        "buckets": {},
     }
 
 
@@ -89,6 +92,55 @@ def record(
     st["last_at"] = now.timestamp()
     st["last_reason"] = reason[:80]
     return st
+
+
+# ── 命名桶 ────────────────────────────────────────────────────────────────
+# 为什么并进这本账：刷片原来在 bili/state.json 里自己记一份，分享又记一份，
+# 加上这里就是三本账。三本账的必然结果是"某一本忘了归零/忘了加"，而这类 bug
+# 不会报错，只会表现为"她今天怎么刷了 7 条"。现在只有一处按天归零。
+
+def _bucket(state: dict[str, Any], name: str) -> dict[str, Any]:
+    b = (state.get("buckets") or {}).get(name) or {}
+    return {"count": int(b.get("count") or 0), "last_at": float(b.get("last_at") or 0.0)}
+
+
+def bucket_used(state: dict[str, Any], name: str, now: datetime | None = None) -> int:
+    return _bucket(_roll(state, now or datetime.now()), name)["count"]
+
+
+def bucket_record(state: dict[str, Any], name: str, now: datetime | None = None) -> dict[str, Any]:
+    now = now or datetime.now()
+    st = _roll(state, now)
+    st.setdefault("buckets", {})
+    b = _bucket(st, name)
+    b["count"] += 1
+    b["last_at"] = now.timestamp()
+    st["buckets"][name] = b
+    return st
+
+
+def bucket_seed(state: dict[str, Any], name: str, count: int,
+                now: datetime | None = None) -> dict[str, Any]:
+    """把别处账本里今天的数字搬进来一次（迁移用）。已有计数就不动。"""
+    now = now or datetime.now()
+    st = _roll(state, now)
+    if bucket_used(st, name, now) or int(count) <= 0:
+        return st
+    st.setdefault("buckets", {})[name] = {"count": int(count), "last_at": now.timestamp()}
+    return st
+
+
+def bucket_allow(state: dict[str, Any], name: str, cap: int, *,
+                 now: datetime | None = None, gap_min: float = 0.0) -> tuple[bool, str]:
+    now = now or datetime.now()
+    b = _bucket(_roll(state, now), name)
+    if b["count"] >= int(cap):
+        return False, f"今天已经用掉 {b['count']}/{int(cap)}"
+    if gap_min > 0 and b["last_at"]:
+        left = gap_min * 60 - (now.timestamp() - b["last_at"])
+        if left > 0:
+            return False, f"还要等 {max(1, int(left // 60))} 分钟"
+    return True, ""
 
 
 def summary(state: dict[str, Any], cfg: dict[str, Any] | None, now: datetime | None = None,

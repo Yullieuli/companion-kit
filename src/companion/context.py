@@ -103,6 +103,11 @@ def build(
     now = now or datetime.now()
     home.init()
 
+    # 灰度总开关（PLAN 2.6）：关掉就等于没有 companion —— 不注入、不决策。
+    # 迁移期两套并存时，这一下能立刻退回旧版本行为，不用卸载、不用改宿主。
+    if not bool((home.rhythm() or {}).get("enabled", True)):
+        return Context(text="", blocks=[], now=now)
+
     blocks: list[Block] = []
     # 宿主自己已经有人格时（hermes 把它当系统提示），别再注入一份：
     # 重复会导致两套语气打架，而且要挤占预算
@@ -138,6 +143,34 @@ def build(
     kept.sort(key=lambda x: order.get(x.name, 99))
     parts = [b.text for b in kept]
     return Context(text="\n\n".join(parts), blocks=kept, now=now)
+
+
+def compose(
+    home: Home,
+    *,
+    now: datetime | None = None,
+    budget: int = DEFAULT_BUDGET,
+    query: str = "",
+    include_soul: bool = True,
+) -> Context:
+    """按默认材料来源拼一份上下文。CLI / MCP / HTTP / 钩子都走这里。
+
+    为什么要有这一个函数：四处各写一遍六个 render 参数，只要有一处漏了，
+    "同一份 store 拼出不同文本"就会发生，而且极难发现。契约测试只盯得住
+    CLI 和 MCP——让其余入口物理上复用同一段代码，才不会有第五种拼法。
+    """
+    from . import life, memory, opinion, people   # 局部导入：这几个模块也依赖 store，避免环
+
+    return build(
+        home,
+        now=now,
+        budget=budget,
+        include_soul=include_soul,
+        memory_text=memory.render(home, query),
+        opinion_text=opinion.render(home, query),
+        person_text=people.render(home, people.OWNER),
+        life_text=life.render(home),
+    )
 
 
 @dataclass

@@ -5,7 +5,7 @@
 
 三条约束，都是为了"只读、不越界"：
   · 只绑 127.0.0.1（要远程自己加 --host，并且知道自己在干什么）
-  · 只有两个 GET：`/health`、`/events`
+  · 只有三个 GET：`/health`、`/events`、`/context`
   · 没有任何写入口。事件是 append-only 的，HTTP 侧不许造事件
 """
 
@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from . import context as context_mod
 from . import events
 from .store import Home
 
@@ -52,8 +53,30 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True, "home": str(self.home.root),
                              "events": len(events.read_all(self.home))})
             return
+        if parsed.path == "/context":
+            # 和 CLI / MCP 走同一个 compose：远端宿主拿到的必须是同一份字
+            try:
+                budget = int((q.get("budget") or ["2000"])[0])
+            except ValueError:
+                self._send(400, {"ok": False, "error": "budget 要是整数"})
+                return
+            pinned = (q.get("now") or [""])[0]
+            try:
+                from datetime import datetime as _dt
+
+                at = _dt.fromisoformat(pinned) if pinned else None
+            except ValueError:
+                self._send(400, {"ok": False, "error": "now 要是 ISO 时间"})
+                return
+            ctx = context_mod.compose(
+                self.home, now=at, budget=budget,
+                query=(q.get("query") or [""])[0],
+                include_soul=(q.get("soul") or ["1"])[0] not in ("0", "false", "no"),
+            )
+            self._send(200, {"ok": True, **ctx.as_dict()})
+            return
         if parsed.path != "/events":
-            self._send(404, {"ok": False, "error": "只有 /health 和 /events"})
+            self._send(404, {"ok": False, "error": "只有 /health、/events、/context"})
             return
         try:
             since = int((q.get("since") or ["0"])[0])

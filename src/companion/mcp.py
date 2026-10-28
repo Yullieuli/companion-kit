@@ -148,14 +148,11 @@ def _t_context(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     from datetime import datetime as _dt
 
     pinned = a.get("now")
-    ctx = context_mod.build(
+    ctx = context_mod.compose(
         home,
         now=_dt.fromisoformat(str(pinned)) if pinned else None,
         budget=int(a.get("budget") or 2000),
-        memory_text=memory.render(home, a.get("query") or ""),
-        opinion_text=opinion.render(home, a.get("query") or ""),
-        person_text=people.render(home, people.OWNER),
-        life_text=life.render(home),
+        query=a.get("query") or "",
     )
     return ctx.as_dict()
 

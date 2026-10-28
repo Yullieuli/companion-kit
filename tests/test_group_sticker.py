@@ -158,3 +158,85 @@ class StickerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class SameTopicTest(unittest.TestCase):
+    """群里"同一件事刚接过就别再追问"。被点名是例外 —— 叫到就得答。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+        # 关掉冷却，只测同话题这一条；不然 8 分钟冷却会先把它挡掉，测不出真假
+        self.home.save_json("group/state.json", {"config": {"cooldown_min": 0}})
+        self.T = datetime(2026, 10, 27, 21, 0)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_same_topic_within_window_is_lurked(self):
+        group.note_reply(self.home, self.T, text="这个战斗系统的节奏感很好")
+        out = group.judge(self.home, "这个战斗系统的节奏感真的很不错",
+                          now=self.T + timedelta(minutes=2), rnd=ZeroRnd())
+        self.assertEqual(out["mode"], "lurk")
+        self.assertIn("不追问", out["reason"])
+
+    def test_topic_expires(self):
+        group.note_reply(self.home, self.T, text="这个战斗系统的节奏感很好")
+        out = group.judge(self.home, "这个战斗系统的节奏感真的很不错",
+                          now=self.T + timedelta(minutes=30), rnd=ZeroRnd())
+        self.assertEqual(out["mode"], "reply")
+
+    def test_addressed_beats_topic(self):
+        group.note_reply(self.home, self.T, text="这个战斗系统的节奏感很好")
+        out = group.judge(self.home, "这个战斗系统的节奏感真的很不错",
+                          now=self.T + timedelta(minutes=2),
+                          addressed_to_me=True, rnd=OneRnd())
+        self.assertEqual(out["mode"], "reply")
+
+    def test_note_reply_without_text_keeps_working(self):
+        # 调用方忘了传 text 不能崩；只是同话题去重会静默失效
+        group.note_reply(self.home, self.T)
+        out = group.judge(self.home, "随便说点什么", now=self.T + timedelta(minutes=2), rnd=ZeroRnd())
+        self.assertIn(out["mode"], ("reply", "lurk"))
+
+
+class StickerBattleTest(unittest.TestCase):
+    """斗图 2–3 轮收手：靠这里不给图，不靠提示词。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+        self.T = datetime(2026, 10, 27, 21, 0)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _add(self, mood: str, name: str):
+        src = Path(self.tmp.name) / f"{name}.png"
+        device.write_png(src, 2, 2, bytes([7] * (2 * 2 * 3)))
+        return sticker.add(self.home, src, mood=mood, name=name)
+
+    def test_pick_stops_after_three(self):
+        for i, mood in enumerate(("开心", "无语", "生气")):
+            rec = self._add(mood, f"s{i}")
+            self.assertIsNotNone(sticker.pick(self.home, mood, rnd=ZeroRnd(), now=self.T))
+            sticker.mark_sent(self.home, rec["name"], self.T)
+
+        self.assertTrue(sticker.battle_state(self.home, self.T)["over"])
+        self.assertIsNone(sticker.pick(self.home, "开心", now=self.T))
+        self.assertIsNone(sticker.pick(self.home, now=self.T))
+
+    def test_battle_resets_after_window(self):
+        for i in range(sticker.BATTLE_MAX):
+            sticker.note_battle(self.home, self.T + timedelta(minutes=i))
+        self.assertTrue(sticker.battle_state(self.home, self.T + timedelta(minutes=3))["over"])
+        later = self.T + timedelta(minutes=3 + sticker.BATTLE_WINDOW_MIN + 1)
+        self.assertFalse(sticker.battle_state(self.home, later)["over"])
+
+    def test_count_is_consecutive_within_window(self):
+        sticker.note_battle(self.home, self.T)
+        out = sticker.note_battle(self.home, self.T + timedelta(minutes=2))
+        self.assertEqual(out["count"], 2)
+        self.assertFalse(out["over"])

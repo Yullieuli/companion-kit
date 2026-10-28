@@ -66,6 +66,11 @@ def same_topic(home: Home, text: str, *, minutes: float = TOPIC_MINUTES,
     return {"dup": False, "common": 0, "prev": ""}
 
 
+def overlap(a: str, b: str) -> int:
+    """两句话最长的公共子串长度。群聊里判断"这是不是同一件事"用。"""
+    return _lcs(a or "", b or "")
+
+
 def soul_name(home: Home) -> str:
     """从 SOUL.md 里认名字：第一个一级标题之后、第一行非空文字。
 

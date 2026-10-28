@@ -14,7 +14,9 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -91,3 +93,87 @@ class ServeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ContextEndpointTest(unittest.TestCase):
+    """/context 必须和 CLI 拼出同一份字。
+
+    远端宿主拿到的注入如果本地和远端不同，表现是"她在两台机器上语气不一样"，
+    这种问题几乎不可能靠看日志发现，所以直接用字节比。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+        self.srv = serve.make_server(self.home, "127.0.0.1", 0)
+        self.port = self.srv.server_address[1]
+        self.thread = threading.Thread(target=self.srv.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+        self.thread.join(timeout=3)
+        self.tmp.cleanup()
+
+    def _get(self, path: str) -> dict:
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=5) as r:
+            return json.loads(r.read().decode("utf-8"))
+
+    def test_context_matches_compose(self):
+        from companion import context as ctx_mod
+
+        pin = "2026-10-28T21:00:00"
+        got = self._get(f"/context?budget=700&now={pin}")
+        want = ctx_mod.compose(self.home, now=datetime.fromisoformat(pin), budget=700)
+        self.assertTrue(got["ok"])
+        self.assertEqual(got["text"], want.text)
+        self.assertEqual([b["name"] for b in got["blocks"]], [b.name for b in want.blocks])
+        self.assertEqual(got["now"], pin)
+
+    def test_soul_can_be_skipped(self):
+        got = self._get("/context?budget=700&soul=0")
+        self.assertNotIn("soul", [b["name"] for b in got["blocks"]])
+
+    def test_bad_budget_is_400(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._get("/context?budget=abc")
+        self.assertEqual(ctx.exception.code, 400)
+
+
+class GraySwitchTest(unittest.TestCase):
+    """灰度总开关：关掉就等于没有 companion。迁移期一键回退靠它。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _off(self):
+        rh = self.home.rhythm()
+        rh["enabled"] = False
+        self.home.save_json("rhythm.json", rh)
+
+    def test_context_empty_when_off(self):
+        self.assertTrue(__import__("companion.context", fromlist=["x"]).compose(self.home).text)
+        self._off()
+        from companion import context as ctx_mod
+
+        got = ctx_mod.compose(self.home)
+        self.assertEqual(got.text, "")
+        self.assertEqual(got.blocks, [])
+
+    def test_drive_silent_when_off(self):
+        from companion import drive
+
+        self._off()
+        out = drive.tick(self.home, now=datetime(2026, 10, 28, 21, 0), host="t")
+        self.assertEqual(out["action"], "silent")
+        self.assertEqual(out["blocked"], "gray")
+
+    def test_default_is_on(self):
+        self.assertTrue(self.home.rhythm().get("enabled"))

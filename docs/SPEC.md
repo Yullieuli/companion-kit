@@ -340,10 +340,10 @@ MCP 工具（三个，不拆细）：
 
 | 节 | 状态 | 说明 |
 |---|---|---|
-| §4 三层架构 | 🟡 | core 无宿主依赖、无网络；契约层 ①MCP ✅ ②Context(CLI) ✅ ③事件(CLI 长轮询) ✅ ④文件协议 ✅；**HTTP 形态未做** |
+| §4 三层架构 | ✅ | core 无宿主依赖、无网络；契约层 ①MCP ✅ ②Context(CLI / HTTP `/context`) ✅ ③事件(CLI + HTTP `/events` 长轮询) ✅ ④文件协议 ✅ |
 | §5.1 MCP 工具 | ✅ | 规格 8 个全部覆盖（context / life / card / wake / say / react / mood / bili）；对外 25 个工具 |
 | §5.2 Context 注入 | ✅ | 六块、优先级、预算、块 hash；投影去重已由 hermes 钩子使用（只注入变化块，状态没变整轮不注入，每 6 轮全量一次） |
-| §5.3 事件订阅 | ✅ | append-only + cursor + 长轮询；`wake_due` / `spend_guard` / `mood_shift` / `bili_watch` / `bili_shared` 都会发；HTTP `/events`（含 `since`/`wait` 长轮询）✅，只读、默认只绑 127.0.0.1、不推进共享 cursor |
+| §5.3 事件订阅 | ✅ | append-only + cursor + 长轮询；`wake_due` / `spend_guard` / `mood_shift` / `bili_watch` / `bili_shared` 都会发；HTTP `/events`（含 `since`/`wait` 长轮询）与 `GET /context` ✅，只读、默认只绑 127.0.0.1、不推进共享 cursor |
 | §5.4 文件协议 | ✅ | `opinions.jsonl` / `bili/*` / 编年史（`life/life.jsonl` 唯一账本，旧 `proactive/life.jsonl` 只读投影）都符合；两处**有意偏差**见下（`people` 用 json、`life` 用单文件） |
 | §5.5 设备控制 | ✅ | 四类目标 + Screen/Input 双 port，五道闸 + `ask` 请示闸；`swipe`/`key`（桌面 SendInput + 浏览器 CDP）、窗口列表/切前台、游戏前台校验 + 坐标换算、窗口级截图（PrintWindow，被盖住也能抓）、`Observe`（本地 tesseract OCR，中文实测可用；无引擎时交宿主的 vision）、动作前后两张图（`before=true`）全部就绪。双屏按虚拟桌面取尺寸与原点；截图只留最近 60 张 / 7 天。宿主在 WSL 时 `device` 自动转发给 Windows 侧同一份代码（`devdelegate`），截图在 Windows 拍、OCR 在 WSL 认 |
 | §5.6 语音 | 🟡 | TTS ✅、唱歌降级版 ✅、边界闸 ✅；SVC ❌（明确 P3） |

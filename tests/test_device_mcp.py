@@ -342,3 +342,56 @@ class ShotPruneTest(unittest.TestCase):
         keep.write_bytes(b"x")
         device._prune_shots(self.home, keep=0, days=0)
         self.assertTrue(keep.exists())
+
+
+class ReplayTest(unittest.TestCase):
+    """回放默认只看不点：屏幕早变了，同一个坐标现在可能是「删除」。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _log(self, action: str, **kw):
+        row = {"at": "2026-10-28T18:00:00", "target": kw.pop("target", "desktop"),
+               "action": action, "ok": True, **kw}
+        self.home.append_jsonl("logs/device.jsonl", row)
+
+    def test_dry_run_lists_without_executing(self):
+        self._log("tap", args={"x": 10, "y": 20})
+        self._log("look")                        # 看不算动作，不该进回放
+        self._log("type", args={"text": "hello"})
+        with patch.object(device, "act") as act_mock:
+            out = device.replay(self.home, 5)
+        self.assertTrue(out["dry_run"])
+        self.assertEqual([s["action"] for s in out["steps"]], ["tap", "type"])
+        self.assertTrue(out["steps"][1]["has_text"])
+        self.assertFalse(act_mock.called)
+
+    def test_execute_skips_text_unless_asked(self):
+        self._log("tap", args={"x": 10, "y": 20})
+        self._log("type", args={"text": "secret"})
+        with patch.object(device, "act",
+                          return_value={"ok": True, "before": "b.png", "after": "a.png"}) as act_mock:
+            out = device.replay(self.home, 5, execute=True)
+        self.assertEqual(act_mock.call_count, 1)       # 文本那条被跳过
+        self.assertTrue(out["steps"][0]["ok"])
+        self.assertIn("skipped", out["steps"][1])
+        self.assertTrue(out["ok"])
+
+    def test_execute_with_text_runs_both(self):
+        self._log("tap", args={"x": 1, "y": 2})
+        self._log("type", args={"text": "hi"})
+        with patch.object(device, "act",
+                          return_value={"ok": True, "before": "b.png", "after": "a.png"}) as act_mock:
+            out = device.replay(self.home, 5, execute=True, with_text=True)
+        self.assertEqual(act_mock.call_count, 2)
+        self.assertTrue(all(s.get("before") == "b.png" for s in out["steps"]))
+
+    def test_empty_log_is_honest(self):
+        out = device.replay(self.home, 5)
+        self.assertEqual(out["steps"], [])
+        self.assertIn("没有可回放", out["hint"])

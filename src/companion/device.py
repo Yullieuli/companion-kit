@@ -609,5 +609,61 @@ def _focus_apply(home: Home, what: str) -> dict[str, Any]:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
+REPLAYABLE = {"tap", "click", "swipe", "type", "key", "focus", "open"}
+
+
+def replay(home: Home, last: int = 5, *, execute: bool = False, with_text: bool = False,
+           is_owner: bool = True) -> dict[str, Any]:
+    """把最近几条动作按原顺序重放一遍（默认只看不点）。
+
+    为什么默认 dry-run：回放的是**已经发生过**的动作，屏幕上的东西早变了，
+    同一个坐标现在可能是"删除"。所以先给一份可核对的清单，人点头才真跑。
+
+    为什么输入要单独再确认一次：`args` 里带着当时打的字，可能是一段私信、
+    一个密码。`--with-text` 是第二个刹车，不是多余的。
+    """
+    rows = home.read_jsonl(LOG, limit=300)
+    picked = [r for r in rows
+              if r.get("ok") and str(r.get("action") or "").lower() in REPLAYABLE]
+    picked = picked[-max(1, int(last)):]
+
+    plan: list[dict[str, Any]] = []
+    for r in picked:
+        action = str(r.get("action") or "").lower()
+        step: dict[str, Any] = {"at": r.get("at"), "target": r.get("target") or "desktop",
+                                "action": action}
+        if action == "open":
+            step["what"] = r.get("what") or (r.get("args") or {}).get("what") or ""
+        else:
+            step["args"] = dict(r.get("args") or {})
+            if "text" in step["args"]:
+                step["has_text"] = True
+        plan.append(step)
+
+    if not plan:
+        return {"ok": True, "dry_run": not execute, "steps": [],
+                "hint": "日志里没有可回放的动作（先 look/act 几次）"}
+    if not execute:
+        return {"ok": True, "dry_run": True, "steps": plan,
+                "hint": "确认无误后加 --yes 真跑；含输入的动作还要再加 --with-text"}
+
+    done: list[dict[str, Any]] = []
+    for step in plan:
+        action, target = step["action"], step["target"]
+        if action == "open":
+            out = open_thing(home, target, str(step.get("what") or ""), is_owner=is_owner)
+        else:
+            args = dict(step.get("args") or {})
+            if "text" in args and not with_text:
+                done.append({"at": step["at"], "action": action, "skipped": "含输入，未加 --with-text"})
+                continue
+            out = act(home, target, action, args, is_owner=is_owner, before=True)
+        done.append({"at": step["at"], "action": action, "target": target,
+                     "ok": bool(out.get("ok")), "before": out.get("before"),
+                     "after": out.get("after"), "error": out.get("error")})
+    return {"ok": all(x.get("ok") or x.get("skipped") for x in done),
+            "dry_run": False, "steps": done}
+
+
 def log_tail(home: Home, n: int = 20) -> list[dict[str, Any]]:
     return home.read_jsonl(LOG, limit=n)

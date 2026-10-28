@@ -19,6 +19,7 @@ import random
 from datetime import datetime, timedelta
 from typing import Any
 
+from . import guard
 from .store import Home
 
 STATE = "group/state.json"
@@ -30,6 +31,9 @@ DEFAULT_CFG: dict[str, Any] = {
     "lurk_streak": 3,           # 连续潜水几次后转 ignore
     "owner_boost": 0.35,        # 主人说话时加多少概率
     "min_chars": 2,             # 太短的消息不值得接（"hhh" "。"）
+    # 同一件事刚接过，就别再追问一遍。群里的"在吗/在不在"最容易踩这个。
+    "same_topic_min": 10,
+    "same_topic_overlap": 6,
 }
 
 
@@ -44,6 +48,8 @@ def _state(home: Home) -> dict[str, Any]:
     d.setdefault("config", {})
     d.setdefault("last_at", 0.0)
     d.setdefault("lurk_streak", 0)
+    d.setdefault("last_topic", "")
+    d.setdefault("last_topic_at", 0.0)
     d.setdefault("hour_key", "")
     d.setdefault("hour_count", 0)
     return d
@@ -89,6 +95,13 @@ def judge(
         left = int(float(cfg["cooldown_min"]) * 60 - elapsed) // 60
         return {"mode": "lurk", "reason": f"刚说过话，再等 {left} 分钟", "score": 0.1}
 
+    # 同一件事刚接过就闭嘴（被点名除外 —— 那一条前面已经返回了）
+    topic = str(st.get("last_topic") or "")
+    since = now.timestamp() - float(st.get("last_topic_at") or 0)
+    if topic and since < float(cfg.get("same_topic_min", 10)) * 60:
+        if guard.overlap(t, topic) >= int(cfg.get("same_topic_overlap", 6)):
+            return {"mode": "lurk", "reason": "这话刚接过，不追问", "score": 0.1}
+
     hour_key = now.strftime("%Y-%m-%d %H")
     count = int(st.get("hour_count") or 0) if st.get("hour_key") == hour_key else 0
     if count >= int(cfg.get("max_per_hour", 4)):
@@ -108,10 +121,17 @@ def judge(
     return {"mode": "lurk", "reason": "看到了，但没什么想说的", "score": round(roll, 3)}
 
 
-def note_reply(home: Home, now: datetime | None = None) -> None:
-    """真接了话才调。重置潜水计数、记冷却与小时配额。"""
+def note_reply(home: Home, now: datetime | None = None, *, text: str = "") -> None:
+    """真接了话才调。重置潜水计数、记冷却与小时配额。
+
+    text 传进来才能记住"刚接的是哪件事"—— 不传就退化成只记冷却，
+    同话题去重静默失效（不会报错，所以更要在调用点记得传）。
+    """
     now = now or datetime.now()
     st = _state(home)
+    if text.strip():
+        st["last_topic"] = text.strip()[:200]
+        st["last_topic_at"] = now.timestamp()
     hour_key = now.strftime("%Y-%m-%d %H")
     if st.get("hour_key") == hour_key:
         st["hour_count"] = int(st.get("hour_count") or 0) + 1

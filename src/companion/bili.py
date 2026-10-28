@@ -24,11 +24,12 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from . import events, fence, life, mood_rules, opinion
+from . import events, fence, life, mood_rules, opinion, quota
 from .store import Home
 
 STATE = "bili/state.json"
 CONFIG = "bili/config.json"
+CACHE = "bili/search_cache.json"
 
 BV_RE = re.compile(r"BV[0-9A-Za-z]{10}")
 
@@ -47,6 +48,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "feeds": ["popular", "ranking", "related", "dynamic"],
     "deep_read_chars": 1200,
     "frames": "auto",          # auto = 只有深读且时长 ≥8 分钟才抽帧（贵、慢）
+    "search_cache_min": 10,    # 同一关键词 10 分钟内复用（读额度只有 3000/天）
     "share": {"max_per_day": 2, "min_score": 13, "same_days": 7, "via": "qq"},
     # 迁移期用：旧 bili-whale 插件的账本还活着，只读它、不写它。
     # 不读就会重演"同一期视频推两次"；写了就成了双写。等旧插件下线，删掉这个键即可。
@@ -86,6 +88,36 @@ def load(home: Home) -> dict[str, Any]:
 
 def save(home: Home, st: dict[str, Any]) -> None:
     home.save_json(STATE, st)
+
+
+def daily_used(home: Home, name: str, *, st: dict[str, Any] | None = None,
+               now: datetime | None = None) -> int:
+    """今天的刷片/分享次数，唯一来源是 quota.json。
+
+    迁移：老状态文件里今天已经记了数，第一次读时搬进 quota 一次，免得当天重置成 0
+    让她多刷一轮。
+    """
+    now = now or datetime.now()
+    q = home.quota()
+    st = load(home) if st is None else st
+    today = now.date().isoformat()
+    if name == "bili":
+        seed, day = int(st.get("watched_today") or 0), str(st.get("day") or "")
+    else:
+        seed, day = int(st.get("share_today") or 0), str(st.get("share_day") or "")
+    if seed > 0 and day == today:
+        q2 = quota.bucket_seed(q, name, seed, now)
+        if q2 != q:
+            home.save_json("quota.json", q2)
+            q = q2
+    return quota.bucket_used(q, name, now)
+
+
+def record_used(home: Home, name: str, now: datetime | None = None) -> int:
+    now = now or datetime.now()
+    st = quota.bucket_record(home.quota(), name, now)
+    home.save_json("quota.json", st)
+    return quota.bucket_used(st, name, now)
 
 
 def config(home: Home) -> dict[str, Any]:
@@ -347,8 +379,33 @@ def her_views(home: Home, limit: int = 3) -> str:
 
 # ── 候选池 ────────────────────────────────────────────────────────────────────
 
+def cached_search(home: Home, net: Any, keyword: str, *, cfg: dict[str, Any],
+                  now: datetime | None = None) -> tuple[list[dict[str, Any]], bool]:
+    """搜过的关键词 10 分钟内复用。返回 (结果, 是否命中)。
+
+    为什么值得做：读额度只有 3000/天，而"按观点搜索"是唯一会连搜的入口。
+    她一天问十几次"该刷什么"，同一句话不该打十几次接口。
+    """
+    cfg = cfg or config(home)
+    now = now or datetime.now()
+    ttl = float(cfg.get("search_cache_min") or 10) * 60
+    d = home._json(CACHE, {})  # noqa: SLF001
+    ent = d.get(keyword) or {}
+    at = float(ent.get("at") or 0)
+    if at and (now.timestamp() - at) < ttl and ent.get("items"):
+        return list(ent["items"]), True
+    items = net.search(keyword)
+    d[keyword] = {"at": now.timestamp(), "items": list(items)[:30]}
+    # 只留最近 20 个关键词、一天内的：这不是档案，是缓存
+    d = {k: v for k, v in sorted(d.items(), key=lambda kv: float((kv[1] or {}).get("at") or 0))
+         if now.timestamp() - float((v or {}).get("at") or 0) < 86400}
+    home.save_json(CACHE, dict(list(d.items())[-20:]))
+    return items, False
+
+
 def gather(net: Any, cfg: dict[str, Any], *, last_bvid: str = "",
-           keywords: list[str] | None = None) -> tuple[list[dict[str, Any]], list[str]]:
+           keywords: list[str] | None = None, home: Home | None = None,
+           now: datetime | None = None) -> tuple[list[dict[str, Any]], list[str]]:
     """按配置拉几个入口。单个入口失败不影响其它 —— 只记一句 why。"""
     out: list[dict[str, Any]] = []
     notes: list[str] = []
@@ -375,7 +432,13 @@ def gather(net: Any, cfg: dict[str, Any], *, last_bvid: str = "",
             notes.append(f"动态失败:{type(e).__name__}")
     for kw in (keywords or [])[:1]:  # 搜索一次就够，多了会烧读额度
         try:
-            out += [normalize(x, "search") for x in net.search(kw)]
+            if home is None:
+                hits = net.search(kw)
+            else:
+                hits, cached = cached_search(home, net, kw, cfg=cfg, now=now)
+                if cached:
+                    notes.append("搜索命中缓存")
+            out += [normalize(x, "search") for x in hits]
         except Exception as e:
             notes.append(f"搜索失败:{type(e).__name__}")
     return [x for x in out if x], notes
@@ -586,8 +649,9 @@ def share_gate(home: Home, bvid: str, *, score_v: int, reason: str, rank: int = 
         return {"ok": False, "why": "说不出为什么好，先别发"}
     if int(rank) != 1:
         return {"ok": False, "why": "只分享排第一的那条"}
-    if int(st.get("share_today") or 0) >= int(s.get("max_per_day") or 2):
-        return {"ok": False, "why": f"今天已经分享 {st['share_today']} 条了"}
+    used = daily_used(home, "share", st=st, now=now)
+    if used >= int(s.get("max_per_day") or 2):
+        return {"ok": False, "why": f"今天已经分享 {used} 条了"}
     last = st.get("shares", {}).get(bvid)
     if last:
         try:
@@ -624,7 +688,7 @@ def share(home: Home, bvid: str, text: str, *, score_v: int, reason: str, rank: 
     st["shares"] = {**(st.get("shares") or {}), bvid: now.date().isoformat()}
     st["shares"] = {k: v for k, v in st["shares"].items()
                     if _within_days(v, now, 60)}
-    st["share_today"] = int(st.get("share_today") or 0) + 1
+    st["share_today"] = record_used(home, "share", now)
     save(home, st)
     life.mark_shared(home, [str(r.get("id")) for r in home.read_jsonl("life/life.jsonl", limit=100000)
                             if str(r.get("bvid") or "") == bvid])
@@ -652,8 +716,9 @@ def due(home: Home, *, cfg: dict[str, Any] | None = None, now: datetime | None =
     st = load(home)
     if not cfg.get("enabled", True):
         return {"due": False, "why": "开关关着"}
-    if int(st.get("watched_today") or 0) >= int(cfg.get("max_per_day") or 4):
-        return {"due": False, "why": f"今天已经刷了 {st['watched_today']} 条"}
+    used = daily_used(home, "bili", st=st, now=now)
+    if used >= int(cfg.get("max_per_day") or 4):
+        return {"due": False, "why": f"今天已经刷了 {used} 条"}
     gap = now.timestamp() - float(st.get("last_at") or 0)
     if gap < float(cfg.get("min_gap_min") or 90) * 60:
         left = int((float(cfg["min_gap_min"]) * 60 - gap) / 60)
@@ -680,7 +745,8 @@ def tick(home: Home, *, net: Any = None, cfg: dict[str, Any] | None = None,
         net = Net(home.root)
 
     try:
-        items, notes = gather(net, cfg, last_bvid=str(st.get("last_bvid") or ""), keywords=keywords)
+        items, notes = gather(net, cfg, last_bvid=str(st.get("last_bvid") or ""),
+                              keywords=keywords, home=home, now=now)
     except Exception as e:
         return {"ok": False, "stage": "gather", "why": f"{type(e).__name__}: {e}"}
     if not items:
@@ -706,7 +772,9 @@ def tick(home: Home, *, net: Any = None, cfg: dict[str, Any] | None = None,
         at=now, extra={"bvid": item["bvid"], "score": item["score"], "src": item.get("src", "")},
     )
     mark_served(st, item, now)
-    st["watched_today"] = int(st.get("watched_today") or 0) + 1
+    # 真正的计数在 quota.json；state 里这两个字段只是给 status 看的镜像，
+    # 镜像丢了不影响限额判断（反过来才会）。
+    st["watched_today"] = record_used(home, "bili", now)
     st["last_at"] = now.timestamp()
     st["last_bvid"] = item["bvid"]
     save(home, st)
@@ -747,12 +815,12 @@ def status(home: Home, *, now: datetime | None = None) -> dict[str, Any]:
         "enabled": bool(cfg.get("enabled", True)),
         "due": d["due"],
         "why": d["why"],
-        "watched_today": int(st.get("watched_today") or 0),
+        "watched_today": daily_used(home, "bili", st=st, now=now),
         "max_per_day": int(cfg.get("max_per_day") or 4),
         "last_at": datetime.fromtimestamp(float(st.get("last_at") or 0)).isoformat(timespec="minutes")
         if st.get("last_at") else "",
         "last_bvid": st.get("last_bvid") or "",
-        "share_today": int(st.get("share_today") or 0),
+        "share_today": daily_used(home, "share", st=st, now=now),
         "shared_recent": sorted(shares.items(), key=lambda kv: kv[1], reverse=True)[:5],
         "taste": cfg.get("taste"),
     }

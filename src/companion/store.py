@@ -57,6 +57,8 @@ INDEX_TEMPLATE = """# 记忆目录
 
 DEFAULT_RHYTHM: dict[str, Any] = {
     "timezone": "Asia/Shanghai",
+    # 总开关：false 时 companion 完全不介入（不注入、不决策），用来一键退回旧行为
+    "enabled": True,
     "windows": [{"start": "20:00", "end": "24:00", "wakes": 2}],
     "sleep": {"at": "00:30", "wake": "09:00"},
     "greeting": {"morning": True, "night": True, "active_days": 3},

@@ -53,15 +53,12 @@ def cmd_init(home: Home, args) -> int:
 
 
 def cmd_context(home: Home, args) -> int:
-    ctx = context_mod.build(
+    ctx = context_mod.compose(
         home,
         now=datetime.fromisoformat(args.now) if getattr(args, "now", "") else None,
         budget=args.budget,
+        query=args.query or "",
         include_soul=not args.no_soul,
-        memory_text=memory.render(home, args.query or ""),
-        opinion_text=opinion.render(home, args.query or ""),
-        person_text=people.render(home, people.OWNER),
-        life_text=life.render(home),
     )
     if args.json:
         _dump(ctx.as_dict(), True)
@@ -407,6 +404,9 @@ def cmd_device(home: Home, args) -> int:
     elif args.action == "focus":
         out = device.focus_window_by(home, args.what or "", is_owner=not args.not_owner,
                                      ask_id=args.ask_id)
+    elif args.action == "replay":
+        out = device.replay(home, args.last, execute=bool(args.yes),
+                            with_text=bool(args.with_text), is_owner=not args.not_owner)
     else:  # log
         out = device.log_tail(home, args.limit)
     _dump(out if args.json else json.dumps(out, ensure_ascii=False, indent=2), args.json)
@@ -683,7 +683,7 @@ def build_parser() -> argparse.ArgumentParser:
     sk.add_argument("--name", default="")
 
     d = sub.add_parser("device", help="手：看屏幕 / 动作 / 打开")
-    d.add_argument("action", choices=["look", "observe", "act", "open", "list", "focus", "log"])
+    d.add_argument("action", choices=["look", "observe", "act", "open", "list", "focus", "log", "replay"])
     d.add_argument("--target", default="desktop", choices=["phone", "desktop", "browser", "game"])
     d.add_argument("--act", default="tap", choices=["tap", "click", "swipe", "type", "key", "focus"])
     d.add_argument("--x", type=int)
@@ -696,6 +696,10 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--ask-id", dest="ask_id", default="", help="主人答应后拿到的那张许可")
     d.add_argument("--no-ocr", action="store_true", help="observe 时不做 OCR")
     d.add_argument("--before", action="store_true", help="动作前也截一张（拿来对比）")
+    d.add_argument("--last", type=int, default=5, help="replay 回放最近几个动作")
+    d.add_argument("--yes", action="store_true", help="replay 时真跑（默认只看）")
+    d.add_argument("--with-text", dest="with_text", action="store_true",
+                   help="replay 时连输入一起重放（默认跳过含文本的动作）")
     d.add_argument("--double", action="store_true")
     d.add_argument("--what")
     d.add_argument("--not-owner", action="store_true", help="模拟非主人会话（验闸用）")

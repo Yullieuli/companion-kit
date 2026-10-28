@@ -24,6 +24,11 @@ from .store import Home
 
 DIR = "stickers"
 INDEX = "stickers/index.json"
+BATTLE = "stickers/battle.json"
+# 斗图是"来回"：连发三张还不收手，就变成刷屏。窗口定 10 分钟，
+# 隔得久了重新计数 —— 晚上斗一轮、第二天再斗一轮是两回事。
+BATTLE_MAX = 3
+BATTLE_WINDOW_MIN = 10
 MOODS = ["开心", "无语", "生气", "害羞", "困", "得意", "疑惑", "安慰"]
 EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
@@ -70,6 +75,28 @@ def add(
     return {"name": name, "mood": mood, "file": d["items"][name]["file"], "tags": d["items"][name]["tags"]}
 
 
+def battle_state(home: Home, now: datetime | None = None) -> dict[str, Any]:
+    """这一轮斗图进行到第几张了。"""
+    now = now or datetime.now()
+    d = home._json(BATTLE, {})  # noqa: SLF001 — store 的唯一出口
+    at = float(d.get("at") or 0)
+    count = int(d.get("count") or 0)
+    if not at or (now.timestamp() - at) > BATTLE_WINDOW_MIN * 60:
+        count = 0
+    return {"count": count, "at": at, "max": BATTLE_MAX,
+            "over": count >= BATTLE_MAX,
+            "left_min": max(0.0, round((at + BATTLE_WINDOW_MIN * 60 - now.timestamp()) / 60, 1)) if at else 0.0}
+
+
+def note_battle(home: Home, now: datetime | None = None) -> dict[str, Any]:
+    """发了一张表情就记一轮。返回记完的状态。"""
+    now = now or datetime.now()
+    st = battle_state(home, now)
+    count = st["count"] + 1
+    home.save_json(BATTLE, {"count": count, "at": now.timestamp()})
+    return {**st, "count": count, "over": count >= BATTLE_MAX}
+
+
 def pick(
     home: Home,
     mood: str = "",
@@ -77,8 +104,14 @@ def pick(
     *,
     avoid_recent: int = 5,
     rnd: Any | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any] | None:
-    """挑一张。没有对得上的就返回 None（不凑合）。"""
+    """挑一张。没有对得上的就返回 None（不凑合）。
+
+    斗图超过轮次也返回 None —— "收手"不能靠提示词，得靠这里不给图。
+    """
+    if battle_state(home, now).get("over"):
+        return None
     d = _index(home)
     items = d.get("items") or {}
     if not items:
@@ -121,6 +154,7 @@ def mark_sent(home: Home, name: str, now: datetime | None = None) -> bool:
         return False
     it["sent"] = int(it.get("sent") or 0) + 1
     it["last_sent"] = (now or datetime.now()).isoformat(timespec="seconds")
+    note_battle(home, now)
     _save(home, d)
     home.append_jsonl("logs/group.jsonl", {"at": it["last_sent"], "event": "sticker", "name": name})
     return True

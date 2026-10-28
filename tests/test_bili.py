@@ -386,3 +386,115 @@ class DayRolloverTest(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SearchCacheTest(unittest.TestCase):
+    """同一关键词 10 分钟内只打一次接口。读额度 3000/天，耗不起重复搜索。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    class _Net:
+        def __init__(self):
+            self.searches: list[str] = []
+
+        def search(self, keyword: str, ps: int = 20):
+            self.searches.append(keyword)
+            return [{"bvid": "BV1srch00001", "title": "影之刃零 关卡设计拆解", "author": "某UP",
+                     "duration": 600, "play": 1, "pubdate": 0, "description": ""}]
+
+    def test_hit_then_miss_after_ttl(self):
+        cfg = bili.config(self.home)
+        net = self._Net()
+        first, cached = bili.cached_search(self.home, net, "影之刃零", cfg=cfg, now=NOW)
+        self.assertFalse(cached)
+        self.assertEqual(len(first), 1)
+        again, cached = bili.cached_search(self.home, net, "影之刃零", cfg=cfg,
+                                           now=NOW + timedelta(minutes=5))
+        self.assertTrue(cached)
+        self.assertEqual(len(net.searches), 1)        # 没有第二次请求
+        third, cached = bili.cached_search(self.home, net, "影之刃零", cfg=cfg,
+                                           now=NOW + timedelta(minutes=11))
+        self.assertFalse(cached)
+        self.assertEqual(len(net.searches), 2)
+
+    def test_gather_uses_cache(self):
+        cfg = {"feeds": [], "duration": {"min_min": 1, "max_min": 60}, "taste": {"like": [], "dislike": []}}
+        net = self._Net()
+        bili.gather(net, cfg, keywords=["影之刃零"], home=self.home, now=NOW)
+        _, notes = bili.gather(net, cfg, keywords=["影之刃零"], home=self.home,
+                               now=NOW + timedelta(minutes=1))
+        self.assertEqual(len(net.searches), 1)
+        self.assertIn("搜索命中缓存", notes)
+
+    def test_gather_without_home_still_works(self):
+        # 老调用点（没传 home）不能被这次改动打断
+        cfg = {"feeds": [], "duration": {"min_min": 1, "max_min": 60}, "taste": {"like": [], "dislike": []}}
+        net = self._Net()
+        items, _ = bili.gather(net, cfg, keywords=["影之刃零"])
+        self.assertEqual(len(items), 1)
+
+
+class QuotaLedgerTest(unittest.TestCase):
+    """刷片和分享的次数只有一本账（quota.json），bili/state 里的只是镜像。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_tick_writes_quota_bucket(self):
+        from companion import quota
+
+        net = FakeNet([item("BV1xx411c7mQ", "极客湾：掌机横评", dur=900)])
+        bili.tick(self.home, net=net, now=NOW)
+        self.assertEqual(quota.bucket_used(self.home.quota(), "bili", NOW), 1)
+        # 镜像也跟着走，但限额读的是 quota
+        self.assertEqual(bili.load(self.home)["watched_today"], 1)
+
+    def test_quota_is_authoritative_even_if_mirror_lost(self):
+        cfg = bili.config(self.home)
+        cfg["max_per_day"] = 1          # 一天只允许一条，镜像丢了也不能变成还能刷
+        cfg["min_gap_min"] = 0
+        net = FakeNet([item("BV1xx411c7mQ", "甲", dur=900)])
+        bili.tick(self.home, net=net, cfg=cfg, now=NOW)
+        st = bili.load(self.home)
+        st["watched_today"] = 0          # 模拟镜像被清掉/被旧版本覆盖
+        bili.save(self.home, st)
+        out = bili.due(self.home, cfg=cfg, now=NOW + timedelta(minutes=95))
+        self.assertFalse(out["due"], "镜像丢了也不能多刷一轮")
+        self.assertIn("今天已经刷了 1", out["why"])
+
+    def test_seed_from_old_state_once(self):
+        """迁移：老状态里今天已刷 3 条，第一次读要搬进 quota，别重置成 0。"""
+        st = bili.load(self.home)
+        st["watched_today"] = 3
+        st["day"] = NOW.date().isoformat()
+        bili.save(self.home, st)
+        self.assertEqual(bili.daily_used(self.home, "bili", now=NOW), 3)
+        st2 = bili.load(self.home)
+        st2["watched_today"] = 0        # 搬完就不再依赖它
+        bili.save(self.home, st2)
+        self.assertEqual(bili.daily_used(self.home, "bili", now=NOW), 3)
+
+    def test_new_day_resets(self):
+        net = FakeNet([item("BV1xx411c7mQ", "甲", dur=900)])
+        bili.tick(self.home, net=net, now=NOW)
+        self.assertEqual(bili.daily_used(self.home, "bili", now=NOW + timedelta(days=1)), 0)
+
+    def test_share_uses_same_ledger(self):
+        from companion import quota
+
+        cfg = bili.config(self.home)
+        out = bili.share(self.home, "BV1xx411c7mQ", "这个值得看", score_v=15,
+                         reason="关卡设计讲透了", cfg=cfg, now=NOW)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(quota.bucket_used(self.home.quota(), "share", NOW), 1)

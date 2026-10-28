@@ -106,6 +106,14 @@ def tick(
         }
 
     rhythm = home.rhythm()
+    if not bool(rhythm.get("enabled", True)):
+        return {
+            "action": "silent", "score": 0.0,
+            "why": "灰度关闭（rhythm.enabled=false）",
+            "cost": 0.0, "blocked": "gray", "candidates": [],
+            "event": None, "spent_today": round(cost.today_total(home, now), 4),
+            "remaining_cny": 0.0, "in_sleep": False, "in_window": False, "host": host,
+        }
     m = mood_mod.decay(home.mood(), now)
     q = home.quota()
     spent = cost.today_total(home, now)
