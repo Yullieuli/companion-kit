@@ -54,10 +54,27 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("今天 ¥0.000", out)
 
-    def test_say_is_dry(self):
-        code, out = run(["--home", self.home, "--json", "say", "--text", "在吗"])
+    def test_say_checks_gates_and_records(self):
+        run(["--home", self.home, "init"])
+        # --dry-run：只判能不能说，不记账
+        code, out = run(["--home", self.home, "--json", "say", "--text", "在吗", "--dry-run"])
         self.assertEqual(code, 0)
         self.assertIn('"dry_run": true', out)
+        self.assertNotIn('"count": 1', out)
+
+        # 真说：过闸 + 记账
+        code, out = run(["--home", self.home, "--json", "say", "--text", "今天风挺大"])
+        self.assertEqual(code, 0)
+        self.assertIn('"ok": true', out)
+        self.assertIn('"count": 1', out)
+
+    def test_say_blocks_renaming(self):
+        # 身份锁在频率闸之前：改名这件事跟今天说过几句话无关
+        run(["--home", self.home, "init"])
+        (Path(self.home) / "SOUL.md").write_text("# 我是谁\n\n我叫柚璃\n", encoding="utf-8")
+        code, out = run(["--home", self.home, "--json", "say", "--text", "以后叫我小璃吧"])
+        self.assertEqual(code, 1)
+        self.assertIn('"blocked": "identity"', out)
 
 
 if __name__ == "__main__":

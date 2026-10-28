@@ -159,9 +159,13 @@ def cmd_turns(home: Home, args) -> int:
 
 
 def cmd_say(home: Home, args) -> int:
-    payload = {"text": args.text, "channel": args.channel or "default", "dry_run": True}
-    _dump(payload, args.json)
-    return 0
+    """她要开口：身份锁 → 频率 → 同话题，过了才记账。"""
+    from . import guard
+
+    out = guard.say(home, args.text, channel=args.channel or "", dry_run=bool(args.dry_run))
+    _dump(out if args.json else (out.get("text") if out.get("ok") else f"没说：{out.get('why')}"),
+          args.json)
+    return 0 if out.get("ok") else 1
 
 
 # ── 记忆 ────────────────────────────────────────────────────
@@ -483,6 +487,12 @@ def cmd_ask(home: Home, args) -> int:
     return 0 if out.get("ok") else 1
 
 
+def cmd_serve(home: Home, args) -> int:
+    from . import serve as serve_mod
+
+    return serve_mod.serve(home, host=args.host, port=args.port)
+
+
 def cmd_doctor(home: Home, args) -> int:
     """体检：版本、路径、模块能不能导入、外部工具在不在、以及给杀软的白名单建议。"""
     import importlib
@@ -594,7 +604,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("say", help="记一句她想说的话")
     s.add_argument("--text", required=True)
-    s.add_argument("--channel")
+    s.add_argument("--channel", default="")
+    s.add_argument("--dry-run", action="store_true", help="只判能不能说，不记账")
 
     m = sub.add_parser("memory", help="记忆页")
     m.add_argument("action", choices=["list", "search", "write", "index", "stale"], nargs="?", default="list")
@@ -715,6 +726,10 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--id", default="", help="请求 id（allow/deny 要）")
     a.add_argument("--json", action="store_true")
 
+    sv = sub.add_parser("serve", help="把事件流开成 HTTP（只读，默认只绑本机）")
+    sv.add_argument("--host", default="127.0.0.1")
+    sv.add_argument("--port", type=int, default=7788)
+
     sub.add_parser("doctor", help="体检：模块/外部工具/杀软误报位置")
 
     mc = sub.add_parser("mcp", help="MCP 服务（stdio）")
@@ -777,6 +792,7 @@ def main(argv: list[str] | None = None) -> int:
         "voice": cmd_voice,
         "bili": cmd_bili,
         "ask": cmd_ask,
+        "serve": cmd_serve,
         "mcp": cmd_mcp,
         "doctor": cmd_doctor,
     }

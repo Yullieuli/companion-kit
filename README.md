@@ -90,6 +90,8 @@ companion context --budget 1200         # 本轮该注入什么（人格/状态/
 companion status                        # 只读：心情、额度、作息、记忆页数
 companion tick                          # 问一次"现在想干什么"（零 token）
 companion events --wait 30              # 等一次 wake_due
+companion say --text "在吗" --dry-run    # 过三道闸（身份/频率/同话题），不记账
+companion serve --port 7788             # 事件流 HTTP（只读，只绑本机）
 companion cost                          # 今天花了多少
 companion cost bili_debrief             # 这件事该用哪个档的模型、约多少钱
 
@@ -125,7 +127,7 @@ companion bili share BV1xx411c7mD --score 15 --reason "他肯定喜欢这个战�
 companion mcp --list                    # 列出 25 个 MCP 工具
 ```
 
-**271 个单测**，全部离线可跑（B 站用假总线，不碰网络）。其中 9 个是契约/回放：
+**292 个单测**，全部离线可跑（B 站用假总线，不碰网络）。其中 9 个是契约/回放：
 CLI、MCP、直接调用三方拼出的上下文必须逐字节一致，真实一轮的注入能按当时的时钟重建。
 
 | 层 | 做了什么 |

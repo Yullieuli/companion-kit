@@ -342,21 +342,20 @@ MCP 工具（三个，不拆细）：
 |---|---|---|
 | §4 三层架构 | 🟡 | core 无宿主依赖、无网络；契约层 ①MCP ✅ ②Context(CLI) ✅ ③事件(CLI 长轮询) ✅ ④文件协议 ✅；**HTTP 形态未做** |
 | §5.1 MCP 工具 | ✅ | 规格 8 个全部覆盖（context / life / card / wake / say / react / mood / bili）；对外 25 个工具 |
-| §5.2 Context 注入 | 🟡 | 五块（+ 观点共六块）、优先级、预算、块 hash 都在；**投影去重（`context.Cache`）尚无宿主调用** |
-| §5.3 事件订阅 | 🟡 | append-only + cursor + 长轮询 ✅；`wake_due` / `spend_guard` / `mood_shift` / `bili_watch` / `bili_shared` 都会发；**HTTP `/events` ❌**（宿主都是本地进程，没人订阅 HTTP） |
+| §5.2 Context 注入 | ✅ | 六块、优先级、预算、块 hash；投影去重已由 hermes 钩子使用（只注入变化块，状态没变整轮不注入，每 6 轮全量一次） |
+| §5.3 事件订阅 | ✅ | append-only + cursor + 长轮询；`wake_due` / `spend_guard` / `mood_shift` / `bili_watch` / `bili_shared` 都会发；HTTP `/events`（含 `since`/`wait` 长轮询）✅，只读、默认只绑 127.0.0.1、不推进共享 cursor |
 | §5.4 文件协议 | ✅ | `opinions.jsonl` / `bili/*` / 编年史（`life/life.jsonl` 唯一账本，旧 `proactive/life.jsonl` 只读投影）都符合；两处**有意偏差**见下（`people` 用 json、`life` 用单文件） |
 | §5.5 设备控制 | ✅ | 四类目标 + Screen/Input 双 port，五道闸 + `ask` 请示闸；`swipe`/`key`（桌面 SendInput + 浏览器 CDP）、窗口列表/切前台、游戏前台校验 + 坐标换算、窗口级截图（PrintWindow，被盖住也能抓）、`Observe`（本地 tesseract OCR，中文实测可用；无引擎时交宿主的 vision）、动作前后两张图（`before=true`）全部就绪。双屏按虚拟桌面取尺寸与原点；截图只留最近 60 张 / 7 天。宿主在 WSL 时 `device` 自动转发给 Windows 侧同一份代码（`devdelegate`），截图在 Windows 拍、OCR 在 WSL 认 |
 | §5.6 语音 | 🟡 | TTS ✅、唱歌降级版 ✅、边界闸 ✅；SVC ❌（明确 P3） |
 | §5.7 成本 | ✅ | 前缀分层 / 事件门 / 本地先做 / 预算闸；分级模型（三档当前统一 `agnes-3.0-flash`，档位只决定估价，可按任务在 `cost/route.json` 升档）；**块级去重已接到 hermes**：只注入变化的块，状态没变就整轮不注入，每 6 轮强制全量一次 |
 | §5.8 自主性 | ✅ | 七候选（含刷 B 站）+ 硬闸 + 便宜优先；说话额度用尽时仍可日记/刷片；`ask` 流程（开程序/切窗口/动游戏先请示，许可一次性、30 分钟、绑定动作）；**写回已闭环**：hermes 的 pre_llm_call 从历史里取她上一句，按 turn 去重写进 `logs/turns.jsonl`（含当轮注入块与时钟），零 token；人格只从 SOUL.md 读、无写接口 |
-| §8 安全 | 🟡 | 主人识别（设备侧）✅、频率闸 ✅、静默衰减 ✅；**注入围栏 ✅（0.2.0 新增）**、身份锁 🟡、同话题 10 分钟不追问 ❌ |
-| §9 测试 | ✅ | 255 个单测；契约测试（CLI / MCP / 直接 build 三方逐字节一致，hermes 变体含 `--no-soul`）✅；回放测试（turn 里留档注入块 + 当时时钟，重建逐字节一致，且能发现漂移）✅ |
+| §8 安全 | ✅ | 主人识别（设备侧）✅、频率闸 ✅、静默衰减 ✅、注入围栏 ✅；**身份锁** ✅（`guard.name_lock`：改名只能改 SOUL.md，嘴上改不算）；**同话题 10 分钟不追问** ✅（`guard.same_topic`，最长公共子串 ≥6 字判重；`say` 直接拦，钩子另把"你刚说过"摆给她看） |
+| §9 测试 | ✅ | 292 个单测；契约测试（CLI / MCP / 直接 build 三方逐字节一致，hermes 变体含 `--no-soul`）✅；回放测试（turn 里留档注入块 + 当时时钟，重建逐字节一致，且能发现漂移）✅ |
 | §10 里程碑 | ✅ | M0/M1/M3/M4/M5 ✅；M2 ✅（hermes/dsh 两宿主已验证）；M6 ✅（MCP + dsh 适配器；旧 bili-whale 已于 10-28 下线） |
 
 ### 剩余工作的优先级
 
-1. §5.6 P3：真 SVC 唱歌（需要音色模型与显存）
-2. 块级去重真正接到宿主（`Cache` 已有，dsh/hermes 还没用它裁剪注入）
-3. 记忆蒸馏：`memory` 目前 0 页 —— 需要一次便宜的模型调用把对话沉淀成页（未做，成本待定）
-4. OCR 引擎：WSL 侧已装 `tesseract-ocr` + `chi_sim`（实测"设置 通用 音量"置信 96.6）；Windows 侧未装，那边会如实返回 `backend=none` 交给 vision
-5. ~~设备补齐~~ ✅ · ~~分级模型映射~~ ✅ · ~~旧账本停产~~ ✅ · ~~文件协议两处偏差~~ ✅（改为有意保留）
+1. §5.6 P3：真 SVC 唱歌 —— **唯一剩下的**，且是外部依赖（音色模型 + 显存）。降级版"唱"已可用
+2. OCR：WSL 侧已装 `tesseract-ocr` + `chi_sim`（实测"设置 通用 音量"置信 96.6）；Windows 侧没装，那边会如实返回 `backend=none` 交给 vision
+3. 记忆蒸馏（可选）：`memory` 0 页，但长期记忆由 hermes 的 hindsight 负责，再建一层会变成"三套记忆"
+4. ~~块级去重~~ ✅ · ~~心情写入~~ ✅ · ~~HTTP 事件流~~ ✅ · ~~身份锁/同话题~~ ✅ · ~~设备补齐~~ ✅ · ~~分级模型~~ ✅ · ~~旧账本~~ ✅

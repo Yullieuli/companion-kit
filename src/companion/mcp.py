@@ -68,7 +68,8 @@ TOOLS: list[Tool] = [
     _schema("companion_events", "读事件流。宿主用它决定要不要起一轮会话。",
             {"since": {"type": "integer", "description": "游标（上次返回的 cursor）"},
              "wait": {"type": "number", "description": "长轮询秒数，0 表示立刻返回", "default": 0}}),
-    _schema("companion_say", "记下她想说的一句话：扣额度、写日志，返回文本。真正发送由宿主的通道完成。",
+    _schema("companion_say", "她要开口前的三道闸：身份锁 / 频率 / 同话题 10 分钟不追问。过了才扣额度、写日志；"
+                             "返回 ok=false 就别发。真正发送由宿主的通道完成。",
             {"text": {"type": "string"}, "channel": {"type": "string", "description": "宿主自己的通道名"}},
             ["text"]),
     _schema("companion_memory_write", "写一页记忆（一个主题一页）。summary 必填：它是索引里唯一被读到的字。",
@@ -238,19 +239,10 @@ def _t_events(home: Home, a: dict[str, Any]) -> dict[str, Any]:
 
 
 def _t_say(home: Home, a: dict[str, Any]) -> dict[str, Any]:
-    text = (a.get("text") or "").strip()
-    if not text:
-        return {"ok": False, "error": "没有内容"}
-    now = datetime.now()
-    from . import quota as quota_mod
+    from . import guard
 
-    st = quota_mod.record(home.quota(), now, "speak")
-    home.save_json("quota.json", st)
-    home.append_jsonl("logs/said.jsonl", {
-        "at": now.isoformat(timespec="seconds"), "text": text,
-        "channel": a.get("channel") or "", "source": "mcp",
-    })
-    return {"ok": True, "text": text, "quota": st}
+    return guard.say(home, a.get("text") or "", channel=a.get("channel") or "",
+                     dry_run=bool(a.get("dry_run")))
 
 
 def _t_memory_write(home: Home, a: dict[str, Any]) -> dict[str, Any]:

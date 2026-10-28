@@ -306,6 +306,24 @@ def main() -> int:
     except Exception as e:
         _note(f"record-skip {type(e).__name__}: {e}")
 
+    # 把"你刚说过什么"摆到她面前：靠提示词管不住重复，但给事实比给规则有用
+    try:
+        from datetime import datetime as _dt
+
+        from companion import guard
+
+        said_recent = guard.recent_said(home, minutes=guard.TOPIC_MINUTES, now=_dt.now())
+        if len(said_recent) >= 2:
+            tail = "；".join(str(r.get("text") or "")[:24] for r in said_recent[-3:])
+            hint = f"【别重复】你刚说过：{tail}。这轮换个说法，或者干脆不接。"
+            from companion.context import Block
+
+            ctx.blocks.append(Block("repeat", hint, 90))
+            ctx.text = ctx.text + "\n\n" + hint
+            text = ctx.text
+    except Exception as e:
+        _note(f"hint-skip {type(e).__name__}: {e}")
+
     if not text:
         return _empty("empty-context")
     try:
