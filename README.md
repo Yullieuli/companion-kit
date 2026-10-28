@@ -100,6 +100,9 @@ companion memory search 游戏            # 标签 > 摘要 > 正文，越近越
 companion memory index                  # 从各页 summary 重新投影索引
 companion life add "看完影之刃零" --kind watch --detail "10 分"
 companion person learn --who owner --fact "讨厌开放式结局"
+companion person pending                 # 哪张卡攒够 20 条该压了
+companion person distill owner           # 出题给宿主的模型去压
+companion person distill owner --fact "喜欢独立游戏" --fact "讨厌标题党"   # 收卷
 companion voice say "今天想跟你说句话"    # 本地 TTS，落盘不发送
 companion device look --target desktop   # 截图 + 前台窗口 + 可见窗口标题
 companion device act --target phone --act tap --x 540 --y 1200
@@ -128,7 +131,7 @@ companion bili share BV1xx411c7mD --score 15 --reason "他肯定喜欢这个战�
 companion mcp --list                    # 列出 25 个 MCP 工具
 ```
 
-**317 个单测**，全部离线可跑（B 站用假总线，不碰网络）。其中 9 个是契约/回放：
+**328 个单测**，全部离线可跑（B 站用假总线，不碰网络）。其中 9 个是契约/回放：
 CLI、MCP、直接调用三方拼出的上下文必须逐字节一致，真实一轮的注入能按当时的时钟重建。
 
 | 层 | 做了什么 |

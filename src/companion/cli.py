@@ -234,6 +234,19 @@ def cmd_person(home: Home, args) -> int:
     if args.action == "learn":
         p = people.learn(home, args.who or people.OWNER, args.fact)
         _dump(p.as_dict() if args.json else f"记住了关于 {p.name or p.key} 的一件事：{args.fact}", args.json)
+    elif args.action == "pending":
+        out = {"ok": True, "pending": people.pending_distill(home)}
+        _dump(out if args.json else (json.dumps(out["pending"], ensure_ascii=False, indent=2)
+                                     if out["pending"] else "（没有该压缩的人物卡）"), args.json)
+    elif args.action == "distill":
+        key = args.who or people.OWNER
+        if getattr(args, "fact", None):
+            p = people.apply_distill(home, key, args.fact)
+            _dump(p.as_dict() if args.json else f"压缩完，留了 {len(p.facts)} 条", args.json)
+        else:
+            _dump(people.distill_prompt(home, key) if args.json
+                  else json.dumps(people.distill_prompt(home, key), ensure_ascii=False, indent=2),
+                  args.json)
     elif args.action == "list":
         _dump([p.as_dict() for p in people.all_people(home)] if args.json
               else "\n".join(people.render(home, p.key) for p in people.all_people(home)) or "（还没有人物卡）", args.json)
@@ -630,9 +643,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="附加字段，可重复：--extra progress=08:30/25:42 --extra bvid=BV1xx")
 
     pe = sub.add_parser("person", help="人物卡")
-    pe.add_argument("action", choices=["get", "learn", "list"], nargs="?", default="get")
+    pe.add_argument("action", choices=["get", "learn", "list", "pending", "distill"],
+                    nargs="?", default="get")
     pe.add_argument("who", nargs="?", default=people.OWNER)
-    pe.add_argument("--fact", default="")
+    pe.add_argument("--fact", action="append", default=[], help="可重复（distill 时是压缩结果）")
 
     rc = sub.add_parser("react", help="把这一轮的感受写回去（心情/人物卡/记忆/观点/生活）")
     rc.add_argument("--from", dest="source_file", help="从一个 JSON 文件读整包")

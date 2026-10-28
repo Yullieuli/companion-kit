@@ -120,3 +120,75 @@ class ScoreTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class FeedbackTest(unittest.TestCase):
+    """被回应加分：只认"他后来接话了吗"这一个信号，且样本太少不加不减。"""
+
+    def setUp(self):
+        import tempfile
+
+        from companion.store import Home
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _log_initiative(self, action: str, at: datetime):
+        self.home.append_jsonl("logs/initiatives.jsonl", {"at": at.isoformat(timespec="seconds"),
+                                                          "action": action, "why": "测试"})
+
+    def _log_user(self, at: datetime):
+        self.home.append_jsonl("logs/turns.jsonl", {"at": at.isoformat(timespec="seconds"),
+                                                    "role": "user", "chars": 3})
+
+    def test_settle_counts_reply(self):
+        self._log_initiative("speak", T0)
+        self._log_user(T0 + timedelta(minutes=8))
+        fb = initiative.settle(self.home, now=T0 + timedelta(hours=1))
+        self.assertEqual(fb["actions"]["speak"]["answered"], 1)
+        self.assertEqual(fb["actions"]["speak"]["total"], 1)
+
+    def test_settle_without_reply(self):
+        self._log_initiative("speak", T0)
+        fb = initiative.settle(self.home, now=T0 + timedelta(hours=1))
+        self.assertEqual(fb["actions"]["speak"]["answered"], 0)
+        self.assertEqual(fb["actions"]["speak"]["total"], 1)
+
+    def test_settle_is_idempotent(self):
+        self._log_initiative("speak", T0)
+        self._log_user(T0 + timedelta(minutes=3))
+        initiative.settle(self.home, now=T0 + timedelta(hours=1))
+        again = initiative.settle(self.home, now=T0 + timedelta(hours=2))
+        self.assertEqual(again["actions"]["speak"]["total"], 1)
+
+    def test_quiet_actions_are_not_scored(self):
+        self._log_initiative("diary", T0)
+        self._log_user(T0 + timedelta(minutes=3))
+        fb = initiative.settle(self.home, now=T0 + timedelta(hours=1))
+        self.assertEqual(fb["actions"], {})
+
+    def test_bonus_needs_samples(self):
+        few = {"actions": {"speak": {"answered": 2, "total": 2}}}
+        self.assertEqual(initiative.bonus(few, "speak"), 0.0)
+        many = {"actions": {"speak": {"answered": 3, "total": 4}}}
+        self.assertGreater(initiative.bonus(many, "speak"), 0)
+        cold = {"actions": {"speak": {"answered": 0, "total": 5}}}
+        self.assertLess(initiative.bonus(cold, "speak"), 0)
+
+    def test_feedback_moves_candidate_score(self):
+        from companion import mood as mood_mod
+
+        base = initiative.Situation(now=T0, mood_state=mood_mod.default_state(), quota_state=quota.default_state(),
+                                    rhythm=RHYTHM, quota_cfg={}, remaining_cny=1.0)
+        warm = dict(base.extra)
+        warm["feedback"] = {"actions": {"speak": {"answered": 4, "total": 4}}}
+        hot = initiative.Situation(now=T0, mood_state=mood_mod.default_state(), quota_state=quota.default_state(),
+                                   rhythm=RHYTHM, quota_cfg={}, remaining_cny=1.0, extra=warm)
+        a = {c.action: c.score for c in initiative._candidates(base)}
+        b = {c.action: c.score for c in initiative._candidates(hot)}
+        self.assertGreater(b["speak"], a["speak"])
+        self.assertEqual(b["diary"], a["diary"])

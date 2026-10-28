@@ -21,6 +21,10 @@ from .store import Home
 DIR = "people"
 OWNER = "owner"
 MAX_FACTS = 40
+# 攒到这么多条就该压一次：40 条上限只是防爆，20 条时人已经读不动了。
+# 压缩本身要模型，companion 不调模型——这里出题和收卷，宿主来做那道题。
+DISTILL_AT = 20
+KEEP_AFTER = 8
 
 
 @dataclass
@@ -147,6 +151,49 @@ def learn(home: Home, key: str, fact: str, now: datetime | None = None) -> Perso
     if fact not in p.facts:
         p.facts.append(fact)
     p.facts = p.facts[-MAX_FACTS:]
+    p.last_seen = (now or datetime.now()).strftime("%Y-%m-%d %H:%M")
+    return _save(home, p)
+
+
+def pending_distill(home: Home) -> list[dict[str, Any]]:
+    """哪些人物卡该压了。"""
+    return [{"key": p.key, "name": p.name or p.key, "facts": len(p.facts)}
+            for p in all_people(home) if len(p.facts) >= DISTILL_AT]
+
+
+def distill_prompt(home: Home, key: str = OWNER, *, keep: int = 6) -> dict[str, Any]:
+    """把素材和题目交给宿主：合并同类、去掉过时和重复、保留能影响相处方式的。
+
+    为什么不自己压：压事实是判断题，需要一个模型。companion 从头到尾不调模型，
+    这条边界一旦破，成本账和"零 token 也能活着"都不成立了。
+    """
+    p = get(home, key)
+    if not p:
+        return {"ok": False, "why": f"没有这张卡：{key}"}
+    return {
+        "ok": True, "key": p.key, "name": p.name or p.key, "keep": int(keep),
+        "facts": list(p.facts),
+        "prompt": (f"下面是关于「{p.name or p.key}」的 {len(p.facts)} 条事实。"
+                   f"合并成最多 {int(keep)} 条：同类合并、去掉互相矛盾的旧说法、保留"
+                   "能影响怎么跟他相处的内容（偏好、边界、忌讳、近况）。"
+                   "只输出一个 JSON 数组，每项一句话。"),
+    }
+
+
+def apply_distill(home: Home, key: str, facts: list[str],
+                  now: datetime | None = None) -> Person:
+    """收卷：用压缩后的几条替换原来那堆。"""
+    p = get(home, key)
+    if not p:
+        raise KeyError(f"没有这张卡：{key}")
+    clean: list[str] = []
+    for f in facts or []:
+        t = str(f).strip()
+        if t and t not in clean:
+            clean.append(t)
+    if not clean:
+        raise ValueError("压缩结果不能为空")
+    p.facts = clean[-KEEP_AFTER:]
     p.last_seen = (now or datetime.now()).strftime("%Y-%m-%d %H:%M")
     return _save(home, p)
 

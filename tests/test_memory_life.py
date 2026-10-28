@@ -220,3 +220,52 @@ class TurnsRotateTest(unittest.TestCase):
         p.write_text('{"said": "只有一句"}\n', encoding="utf-8")
         react_mod._trim_turns(self.home, keep=2000)
         self.assertEqual(len(p.read_text(encoding="utf-8").splitlines()), 1)
+
+
+class DistillTest(unittest.TestCase):
+    """人物卡攒到 20 条要压一次。压缩本身是模型活，companion 只出题和收卷。"""
+
+    def setUp(self):
+        from companion import people
+
+        self.people = people
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_threshold(self):
+        for i in range(self.people.DISTILL_AT - 1):
+            self.people.learn(self.home, self.people.OWNER, f"事实 {i}")
+        self.assertEqual(self.people.pending_distill(self.home), [])
+        self.people.learn(self.home, self.people.OWNER, "最后一条")
+        pending = self.people.pending_distill(self.home)
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["facts"], self.people.DISTILL_AT)
+
+    def test_prompt_carries_materials(self):
+        for i in range(self.people.DISTILL_AT):
+            self.people.learn(self.home, self.people.OWNER, f"事实 {i}")
+        got = self.people.distill_prompt(self.home, self.people.OWNER, keep=5)
+        self.assertTrue(got["ok"])
+        self.assertEqual(len(got["facts"]), self.people.DISTILL_AT)
+        self.assertIn("最多 5 条", got["prompt"])
+
+    def test_apply_replaces_and_dedupes(self):
+        for i in range(self.people.DISTILL_AT):
+            self.people.learn(self.home, self.people.OWNER, f"事实 {i}")
+        p = self.people.apply_distill(self.home, self.people.OWNER,
+                                      ["他喜欢独立游戏", "他讨厌标题党", "他喜欢独立游戏"])
+        self.assertEqual(p.facts, ["他喜欢独立游戏", "他讨厌标题党"])
+        self.assertEqual(self.people.pending_distill(self.home), [])
+
+    def test_empty_result_is_refused(self):
+        self.people.learn(self.home, self.people.OWNER, "一条")
+        with self.assertRaises(ValueError):
+            self.people.apply_distill(self.home, self.people.OWNER, ["  ", ""])
+
+    def test_missing_person(self):
+        got = self.people.distill_prompt(self.home, "不存在的人")
+        self.assertFalse(got["ok"])

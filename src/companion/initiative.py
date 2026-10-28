@@ -17,6 +17,15 @@ from datetime import datetime
 from typing import Any
 
 from . import clock, mood as mood_mod, quota as quota_mod
+from .store import Home
+
+LOG = "logs/initiatives.jsonl"
+FEEDBACK = "initiative/feedback.json"
+# 会"对着他"做的动作：只有这几种谈得上被回应。写日记、刷片、沉默不算。
+TO_OWNER = ("speak", "voice", "sing", "share")
+SETTLE_HOURS = 6
+# 样本少于这个数就不加不减：三条就下结论等于用噪声调参
+MIN_SAMPLES = 3
 
 # 每个动作的典型花费（元），用于"同样想做时选便宜的"
 COST_EST = {
@@ -59,6 +68,82 @@ class Candidate:
 
     def as_dict(self) -> dict[str, Any]:
         return {"action": self.action, "score": round(self.score, 3), "why": self.why, "cost": self.cost}
+
+
+def _feedback(home: Home) -> dict[str, Any]:
+    d = home._json(FEEDBACK, {})  # noqa: SLF001 — store 的唯一出口
+    if not isinstance(d, dict):
+        d = {}
+    d.setdefault("actions", {})
+    d.setdefault("last_at", 0.0)
+    d.setdefault("settled", 0)
+    return d
+
+
+def feedback(home: Home) -> dict[str, Any]:
+    return _feedback(home)
+
+
+def settle(home: Home, *, now: datetime | None = None,
+           window_h: float = SETTLE_HOURS) -> dict[str, Any]:
+    """给上一次主动行为结账：他后来接话了吗。
+
+    为什么要等：主动说话的"成效"只有一种可观察信号——他回了。
+    当场判断不了（人可能十分钟后才看到），所以下一次 tick 回来结账。
+    """
+    now = now or datetime.now()
+    fb = _feedback(home)
+    rows = home.read_jsonl(LOG, limit=1)
+    if not rows:
+        return fb
+    last = rows[-1]
+    try:
+        at = datetime.fromisoformat(str(last.get("at")))
+    except Exception:
+        return fb
+    if at.timestamp() <= float(fb.get("last_at") or 0):
+        return fb
+
+    action = str(last.get("action") or "")
+    fb["last_at"] = at.timestamp()
+    if action not in TO_OWNER:
+        home.save_json(FEEDBACK, fb)
+        return fb
+
+    end = at.timestamp() + float(window_h) * 3600
+    answered = False
+    for r in home.read_jsonl("logs/turns.jsonl", limit=500):
+        if r.get("role") != "user":
+            continue
+        try:
+            t = datetime.fromisoformat(str(r.get("at"))).timestamp()
+        except Exception:
+            continue
+        if at.timestamp() < t <= end:
+            answered = True
+            break
+
+    slot = fb["actions"].setdefault(action, {"answered": 0, "total": 0})
+    slot["total"] = int(slot.get("total") or 0) + 1
+    if answered:
+        slot["answered"] = int(slot.get("answered") or 0) + 1
+    fb["settled"] = int(fb.get("settled") or 0) + 1
+    home.save_json(FEEDBACK, fb)
+    return fb
+
+
+def bonus(fb: dict[str, Any], action: str) -> float:
+    """他接话的比例。只调 0.06，够影响接近的候选，不足以盖过硬闸。"""
+    slot = ((fb or {}).get("actions") or {}).get(action) or {}
+    total = int(slot.get("total") or 0)
+    if total < MIN_SAMPLES:
+        return 0.0
+    rate = int(slot.get("answered") or 0) / total
+    if rate >= 0.5:
+        return 0.06
+    if rate <= 0.2:
+        return -0.06
+    return 0.0
 
 
 def _candidates(s: Situation) -> list[Candidate]:
@@ -151,6 +236,16 @@ def _candidates(s: Situation) -> list[Candidate]:
 
     # 什么都不做：基线。真实的她大部分时间是安静的
     out.append(Candidate("silent", 0.35, "没什么想说的", 0.0))
+
+    # 被回应过的动作加一点分，老是被忽略的减一点。理由写进 why，
+    # 这样日志里能看出"她今天为什么更想说话"，而不是一个凭空的数字。
+    fb = (s.extra or {}).get("feedback") or {}
+    for c in out:
+        b = bonus(fb, c.action)
+        if not b:
+            continue
+        c.score = max(0.0, min(1.0, c.score + b))
+        c.why = (c.why + "、" if c.why else "") + ("他上次接了话" if b > 0 else "上次他没接")
     return out
 
 

@@ -114,6 +114,7 @@ def tick(
             "event": None, "spent_today": round(cost.today_total(home, now), 4),
             "remaining_cny": 0.0, "in_sleep": False, "in_window": False, "host": host,
         }
+    fb = initiative.settle(home, now=now)
     m = mood_mod.decay(home.mood(), now)
     q = home.quota()
     spent = cost.today_total(home, now)
@@ -137,6 +138,7 @@ def tick(
         days_since_voice=days_since_voice,
         remaining_cny=remaining,
         owner_waiting=owner_waiting,
+        extra={"feedback": fb},
         bili_due=bili_ok,
         bili_why=bili_why,
     )
