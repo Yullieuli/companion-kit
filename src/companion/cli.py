@@ -31,7 +31,7 @@ from pathlib import Path
 
 from . import context as context_mod
 from . import device, devdelegate
-from . import cost, drive, events, fence, group, life, memory, mood as mood_mod, opinion, people, react as react_mod, sticker
+from . import cost, drive, events, fence, group, life, memory, mood as mood_mod, mood_rules, opinion, people, react as react_mod, sticker
 from .store import Home
 
 
@@ -322,7 +322,14 @@ def cmd_mood(home: Home, args) -> int:
         home.save_json("mood/state.json", st)
     else:
         st = mood_mod.decay(home.mood())
-    _dump({"mood": st, "summary": mood_mod.summary(st)} if args.json else mood_mod.summary(st), args.json)
+    if args.json:
+        _dump({"mood": st, "summary": mood_mod.summary(st),
+               "today": mood_rules.snapshot(home)}, True)
+        return 0
+    print(mood_mod.summary(st))
+    snap = mood_rules.snapshot(home).get("left_today") or {}
+    if snap:
+        print("今天还能推动：" + "、".join(f"{k} {v:+.1f}" for k, v in snap.items()))
     return 0
 
 

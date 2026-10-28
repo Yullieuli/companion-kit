@@ -61,6 +61,68 @@ def _note(line: str) -> None:
 
 
 SAID_STATE = "logs/.hook_said.json"
+CTX_STATE = "logs/.hook_ctx.json"
+# 每 N 轮强制整段重发一次。历史被压缩/裁剪时，之前注入的那份可能已经不在了，
+# 只发"变化块"会让她丢掉状态；这个数字就是"最多陈旧几轮"。
+FULL_EVERY = int(os.environ.get("COMPANION_FULL_EVERY", "6") or 6)
+
+
+def _ctx_state(home) -> dict:
+    import json as _json
+
+    try:
+        d = _json.loads((home.root / CTX_STATE).read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_ctx_state(home, data: dict) -> None:
+    import json as _json
+
+    p = home.root / CTX_STATE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(_json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(p)
+
+
+def _render_delta(home, session: str, ctx) -> str:
+    """只发变化的块。状态没变就不发 —— 上一轮那份还在会话历史里。
+
+    省的是**每一轮重复注入同一段前缀**的钱；不这么做的话，
+    700 字的状态每轮都重发一次，10 轮就是 7000 字。
+    """
+    import re
+    from datetime import datetime
+
+    def _key(text: str) -> str:
+        """比对用的指纹：把「【现在】周三 17:39」里的时间抹掉。
+
+        不抹的话状态块每分钟都"变了"，去重等于没做——每一轮都会重发一遍。
+        真正要发的时候发的仍是带时间的原文。
+        """
+        return re.sub(r"(?m)^【现在】.*$", "【现在】", text or "")
+
+    st = _ctx_state(home)
+    prev = st.get(session) if isinstance(st.get(session), dict) else {}
+    seen = prev.get("blocks") if isinstance(prev.get("blocks"), dict) else {}
+    count = int(prev.get("count") or 0)
+    now_map = {b.name: _key(b.text) for b in ctx.blocks}
+    changed = [b for b in ctx.blocks if seen.get(b.name) != _key(b.text)]
+    full = (not seen) or (count % FULL_EVERY == 0)
+
+    st[session] = {"blocks": now_map, "count": count + 1,
+                   "at": datetime.now().isoformat(timespec="seconds")}
+    if len(st) > 40:                      # 别让它无限长
+        st = dict(list(st.items())[-40:])
+    _save_ctx_state(home, st)
+
+    if full:
+        return ctx.text
+    if not changed:
+        return ""
+    return "【状态更新】\n" + "\n\n".join(b.text for b in changed)
 
 
 def _msg_text(raw) -> str:
@@ -103,7 +165,7 @@ def _said_state(home) -> list[str]:
         return []
 
 
-def _record_turn(home, said: str, ctx: dict, turn: str, platform: str) -> None:
+def _record_turn(home, said: str, ctx: dict, turn: str, platform: str) -> bool:
     """把她说的话写回 companion（零 token：一次本地子进程，不调模型）。
 
     为什么放在 pre_llm_call：hermes 没有 post_response 钩子，但这里能拿到完整历史，
@@ -114,7 +176,7 @@ def _record_turn(home, said: str, ctx: dict, turn: str, platform: str) -> None:
     import subprocess
 
     if not said or said.startswith("[SILENT]"):
-        return
+        return False
     digest = hashlib.sha1(f"{turn}|{said}".encode("utf-8")).hexdigest()[:16]
     seen = _said_state(home)
     if digest in seen:
@@ -131,12 +193,14 @@ def _record_turn(home, said: str, ctx: dict, turn: str, platform: str) -> None:
         )
         if done.returncode != 0:
             _note(f"react-fail {done.returncode}: {(done.stderr or '')[:120]}")
-            return
+            return False
         seen.append(digest)
         (home.root / SAID_STATE).write_text(_json.dumps(seen[-40:]), encoding="utf-8")
         _note(f"react-said {len(said)}c platform={platform}")
+        return True
     except Exception as e:
         _note(f"react-error {type(e).__name__}: {e}")
+        return False
 
 
 def _empty(reason: str = "") -> int:
@@ -177,6 +241,7 @@ def main() -> int:
     # 不记的话 companion 永远以为他刚说过话，衰减机制等于没开。
     # 按 (turn_id + 正文) 去重：一次用户消息会触发多次 LLM 调用（工具循环），
     # 不去重的话 turns 会被同一条消息刷满，`_owner_last_seen` 也会被推到现在。
+    gap_hours = 0.0
     if user_text.strip():
         try:
             import hashlib
@@ -191,6 +256,15 @@ def main() -> int:
             except Exception:
                 pass
             if udigest != last:
+                # 上次他说话是多久以前：用来判断"他隔了很久才回来"
+                try:
+                    prev = [r for r in home.read_jsonl("logs/turns.jsonl", limit=200)
+                            if r.get("role") == "user" and r.get("at")]
+                    if prev:
+                        then = datetime.fromisoformat(str(prev[-1]["at"]))
+                        gap_hours = max(0.0, (datetime.now() - then).total_seconds() / 3600.0)
+                except Exception:
+                    gap_hours = 0.0
                 home.append_jsonl("logs/turns.jsonl", {
                     "at": datetime.now().isoformat(timespec="seconds"),
                     "role": "user", "platform": platform, "chars": len(user_text),
@@ -220,14 +294,31 @@ def main() -> int:
     # 先把她上一句写回去（读侧是注入，写侧是这里），再注入
     try:
         said = _last_assistant(payload.get("conversation_history"))
-        _record_turn(home, said, ctx.as_dict(), str(payload.get("turn_id") or ""), platform)
+        recorded = _record_turn(home, said, ctx.as_dict(),
+                                str(payload.get("turn_id") or ""), platform)
+        if recorded:
+            # 心情只在她真的开口之后才动：否则每次 LLM 调用都推一次，等于按调用次数计心情
+            from companion import mood_rules
+
+            r = mood_rules.on_turn(home, gap_hours=gap_hours)
+            if r.get("applied"):
+                _note(f"mood {r['applied']} -> {r.get('label')}")
     except Exception as e:
         _note(f"record-skip {type(e).__name__}: {e}")
 
     if not text:
         return _empty("empty-context")
-    _note(f"inject {len(text)}c session={session[:24]}")
-    print(json.dumps({"context": text}, ensure_ascii=False))
+    try:
+        payload_text = _render_delta(home, session, ctx)
+    except Exception as e:
+        _note(f"dedupe-fail {type(e).__name__}: {e}")
+        payload_text = text
+    if not payload_text.strip():
+        _note(f"inject-delta 0c session={session[:24]}（状态没变，省一轮）")
+        print("{}")
+        return 0
+    _note(f"inject {len(payload_text)}c session={session[:24]}")
+    print(json.dumps({"context": payload_text}, ensure_ascii=False))
     return 0
 
 

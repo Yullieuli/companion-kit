@@ -24,7 +24,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from . import events, fence, life, opinion
+from . import events, fence, life, mood_rules, opinion
 from .store import Home
 
 STATE = "bili/state.json"
@@ -629,6 +629,10 @@ def share(home: Home, bvid: str, text: str, *, score_v: int, reason: str, rank: 
     life.mark_shared(home, [str(r.get("id")) for r in home.read_jsonl("life/life.jsonl", limit=100000)
                             if str(r.get("bvid") or "") == bvid])
     events.emit(home, "bili_shared", now, bvid=bvid, via=via, chars=len(text))
+    try:
+        mood_rules.on_shared(home, now=now)
+    except Exception:
+        pass
     return {"ok": True, "via": via, "sent": sent, "score": int(score_v), "reason": reason}
 
 
@@ -708,6 +712,10 @@ def tick(home: Home, *, net: Any = None, cfg: dict[str, Any] | None = None,
     save(home, st)
     events.emit(home, "bili_watch", now, bvid=item["bvid"], title=item["title"][:60],
                 score=item["score"], minutes=int(item.get("duration") or 0) // 60)
+    try:
+        mood_rules.on_watched(home, int(item["score"]), now=now)
+    except Exception:
+        pass
 
     return {
         "ok": True,

@@ -103,3 +103,64 @@ class RecordTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeltaInjectTest(unittest.TestCase):
+    """块级去重：状态没变就别重发，上一轮那份还在历史里。
+
+    省钱的关键不是"少写"，是"别把同一段 700 字的状态每轮重发一遍"。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _ctx(self, state_text: str, life_text: str = ""):
+        from companion import context as ctx_mod
+
+        blocks = [ctx_mod.Block("state", state_text, 20)]
+        if life_text:
+            blocks.append(ctx_mod.Block("life", life_text, 80))
+        return ctx_mod.Context(text="\n\n".join(b.text for b in blocks), blocks=blocks)
+
+    def test_first_time_sends_everything(self):
+        ctx = self._ctx("【现在】周三 17:57\n【状态】不在作息窗口")
+        self.assertEqual(hook._render_delta(self.home, "s1", ctx), ctx.text)
+
+    def test_unchanged_sends_nothing(self):
+        ctx = self._ctx("【现在】周三 17:57\n【状态】不在作息窗口")
+        hook._render_delta(self.home, "s1", ctx)
+        same = self._ctx("【现在】周三 18:03\n【状态】不在作息窗口")   # 时间变了，其余没变
+        self.assertEqual(hook._render_delta(self.home, "s1", same), "")
+
+    def test_only_changed_blocks_sent(self):
+        a = self._ctx("【现在】周三 17:57\n【状态】在")
+        hook._render_delta(self.home, "s1", a)
+        b = self._ctx("【现在】周三 17:57\n【状态】在", "【你最近在做的事】\n- 20:31 看了《影之刃零》")
+        out = hook._render_delta(self.home, "s1", b)
+        self.assertTrue(out.startswith("【状态更新】"))
+        self.assertIn("影之刃零", out)
+        self.assertNotIn("【状态】在", out)          # 没变的块不重发
+
+    def test_full_refresh_every_n_turns(self):
+        ctx = self._ctx("【现在】周三 17:57\n【状态】在")
+        old = hook.FULL_EVERY
+        hook.FULL_EVERY = 2
+        try:
+            first = hook._render_delta(self.home, "s1", ctx)     # count 0 → full
+            second = hook._render_delta(self.home, "s1", ctx)    # count 1 → delta(空)
+            third = hook._render_delta(self.home, "s1", ctx)     # count 2 → full
+        finally:
+            hook.FULL_EVERY = old
+        self.assertTrue(first)
+        self.assertEqual(second, "")
+        self.assertEqual(third, ctx.text)
+
+    def test_sessions_are_independent(self):
+        ctx = self._ctx("【现在】周三 17:57\n【状态】在")
+        hook._render_delta(self.home, "s1", ctx)
+        self.assertEqual(hook._render_delta(self.home, "s2", ctx), ctx.text)

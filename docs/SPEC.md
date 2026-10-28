@@ -91,6 +91,13 @@ GET /context?session=xxx&channel=qq:group:123&budget=2500
 5. 生活事件（近 24h，未反应优先）
 
 **投影去重**：每块算 hash，宿主侧缓存；未变化不重复注入（省 token 的关键）。
+hermes 侧已实装：状态没变就整轮注入空（上一轮那份还在会话历史里），
+每 6 轮强制全量一次，避免历史被压缩后她丢状态。
+
+**心情怎么动（`mood_rules`）**：只认可观察的行为，每条都能指着事件说"因为这件事"——
+开口了 closeness +0.6 / energy −0.2；隔 12 小时以上才回来 satisfaction +3；
+刷到评分 ≥6 的视频 +1.5；分享出去 +2。每天有上限（closeness 8 / satisfaction 10 / energy −6），
+不然一天聊 50 句就成了计数器而不是关系。
 
 **两处有意偏差（不改，附理由）**
 
@@ -336,11 +343,11 @@ MCP 工具（三个，不拆细）：
 | §4 三层架构 | 🟡 | core 无宿主依赖、无网络；契约层 ①MCP ✅ ②Context(CLI) ✅ ③事件(CLI 长轮询) ✅ ④文件协议 ✅；**HTTP 形态未做** |
 | §5.1 MCP 工具 | ✅ | 规格 8 个全部覆盖（context / life / card / wake / say / react / mood / bili）；对外 25 个工具 |
 | §5.2 Context 注入 | 🟡 | 五块（+ 观点共六块）、优先级、预算、块 hash 都在；**投影去重（`context.Cache`）尚无宿主调用** |
-| §5.3 事件订阅 | 🟡 | append-only + cursor + 长轮询 ✅；`wake_due` / `spend_guard` / `mood_shift` 都会发；**HTTP `/events` ❌** |
+| §5.3 事件订阅 | 🟡 | append-only + cursor + 长轮询 ✅；`wake_due` / `spend_guard` / `mood_shift` / `bili_watch` / `bili_shared` 都会发；**HTTP `/events` ❌**（宿主都是本地进程，没人订阅 HTTP） |
 | §5.4 文件协议 | ✅ | `opinions.jsonl` / `bili/*` / 编年史（`life/life.jsonl` 唯一账本，旧 `proactive/life.jsonl` 只读投影）都符合；两处**有意偏差**见下（`people` 用 json、`life` 用单文件） |
 | §5.5 设备控制 | ✅ | 四类目标 + Screen/Input 双 port，五道闸 + `ask` 请示闸；`swipe`/`key`（桌面 SendInput + 浏览器 CDP）、窗口列表/切前台、游戏前台校验 + 坐标换算、窗口级截图（PrintWindow，被盖住也能抓）、`Observe`（本地 tesseract OCR，中文实测可用；无引擎时交宿主的 vision）、动作前后两张图（`before=true`）全部就绪。双屏按虚拟桌面取尺寸与原点；截图只留最近 60 张 / 7 天。宿主在 WSL 时 `device` 自动转发给 Windows 侧同一份代码（`devdelegate`），截图在 Windows 拍、OCR 在 WSL 认 |
 | §5.6 语音 | 🟡 | TTS ✅、唱歌降级版 ✅、边界闸 ✅；SVC ❌（明确 P3） |
-| §5.7 成本 | 🟡 | 前缀分层 / 事件门 / 本地先做 / 预算闸 ✅；分级模型 ✅（三档当前统一 `agnes-3.0-flash`，档位只决定估价；可在 `cost/route.json` 按任务升档）；块级去重只在 `Cache` 里，宿主尚未真正使用 |
+| §5.7 成本 | ✅ | 前缀分层 / 事件门 / 本地先做 / 预算闸；分级模型（三档当前统一 `agnes-3.0-flash`，档位只决定估价，可按任务在 `cost/route.json` 升档）；**块级去重已接到 hermes**：只注入变化的块，状态没变就整轮不注入，每 6 轮强制全量一次 |
 | §5.8 自主性 | ✅ | 七候选（含刷 B 站）+ 硬闸 + 便宜优先；说话额度用尽时仍可日记/刷片；`ask` 流程（开程序/切窗口/动游戏先请示，许可一次性、30 分钟、绑定动作）；**写回已闭环**：hermes 的 pre_llm_call 从历史里取她上一句，按 turn 去重写进 `logs/turns.jsonl`（含当轮注入块与时钟），零 token；人格只从 SOUL.md 读、无写接口 |
 | §8 安全 | 🟡 | 主人识别（设备侧）✅、频率闸 ✅、静默衰减 ✅；**注入围栏 ✅（0.2.0 新增）**、身份锁 🟡、同话题 10 分钟不追问 ❌ |
 | §9 测试 | ✅ | 255 个单测；契约测试（CLI / MCP / 直接 build 三方逐字节一致，hermes 变体含 `--no-soul`）✅；回放测试（turn 里留档注入块 + 当时时钟，重建逐字节一致，且能发现漂移）✅ |
