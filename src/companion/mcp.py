@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from . import context as context_mod
-from . import bili, cost, device, drive, events, fence, group, life, memory, mood as mood_mod, opinion, people, react as react_mod, sticker, voice
+from . import ask as ask_mod, bili, cost, device, drive, events, fence, group, life, memory, mood as mood_mod, opinion, people, react as react_mod, sticker, voice
 from .store import Home
 
 PROTOCOL = "2024-11-05"
@@ -107,6 +107,9 @@ TOOLS: list[Tool] = [
     _schema("companion_cost", "今天花了多少 / 预算还剩多少。"),
     _schema("companion_voice", "合成一段语音（本地 TTS），返回文件路径。sing=true 是降级版「唱」。",
             {"text": {"type": "string"}, "sing": {"type": "boolean", "default": False}}, ["text"]),
+    _schema("companion_ask", "她动手前的请示：list 看待答应的 / allow 答应 / deny 拒绝。答应后动作要用 ask_id 重试。",
+            {"action": {"type": "string", "enum": ["list", "allow", "deny"], "default": "list"},
+             "id": {"type": "string"}}, []),
     _schema("companion_bili",
             "刷 B 站：tick=挑一条并读完（返回素材，不返回长文案）/ debrief=只读某条 / "
             "commit=回填她自己的感受 / share=分享给主人 / status=今天刷了几条、还能不能刷。",
@@ -125,11 +128,11 @@ TOOLS: list[Tool] = [
              "x": {"type": "integer"}, "y": {"type": "integer"},
              "x2": {"type": "integer"}, "y2": {"type": "integer"},
              "text": {"type": "string"}, "key": {"type": "string"}, "window": {"type": "string"},
-             "double": {"type": "boolean"}},
+             "double": {"type": "boolean"}, "ask_id": {"type": "string"}},
             ["target", "action"]),
-    _schema("device_open", "打开一个 App / 网址 / 程序（走白名单）。",
+    _schema("device_open", "打开一个 App / 网址 / 程序（走白名单）。可能需要先请示（会返回 ask）。",
             {"target": {"type": "string", "enum": ["phone", "desktop", "browser", "game"]},
-             "what": {"type": "string"}}, ["target", "what"]),
+             "what": {"type": "string"}, "ask_id": {"type": "string"}}, ["target", "what"]),
 ]
 
 
@@ -322,6 +325,15 @@ def _t_voice(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     return r
 
 
+def _t_ask(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    action = a.get("action") or "list"
+    if action == "allow":
+        return ask_mod.decide(home, str(a.get("id") or ""), True)
+    if action == "deny":
+        return ask_mod.decide(home, str(a.get("id") or ""), False)
+    return {"ok": True, "pending": ask_mod.pending(home), "recent": ask_mod.list_all(home, limit=10)}
+
+
 def _t_bili(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     action = a.get("action") or "status"
     if action == "status":
@@ -352,11 +364,13 @@ def _t_look(home: Home, a: dict[str, Any]) -> dict[str, Any]:
 
 def _t_act(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     args = {k: a[k] for k in ("x", "y", "x2", "y2", "text", "key", "window", "double") if k in a}
-    return device.act(home, a["target"], a["action"], args, is_owner=bool(a.get("is_owner", True)))
+    return device.act(home, a["target"], a["action"], args,
+                      is_owner=bool(a.get("is_owner", True)), ask_id=a.get("ask_id") or "")
 
 
 def _t_open(home: Home, a: dict[str, Any]) -> dict[str, Any]:
-    return device.open_thing(home, a["target"], a["what"], is_owner=bool(a.get("is_owner", True)))
+    return device.open_thing(home, a["target"], a["what"],
+                             is_owner=bool(a.get("is_owner", True)), ask_id=a.get("ask_id") or "")
 
 
 HANDLERS: dict[str, Callable[[Home, dict[str, Any]], dict[str, Any]]] = {
@@ -382,6 +396,7 @@ HANDLERS: dict[str, Callable[[Home, dict[str, Any]], dict[str, Any]]] = {
     "companion_cost": _t_cost,
     "companion_voice": _t_voice,
     "companion_bili": _t_bili,
+    "companion_ask": _t_ask,
     "device_look": _t_look,
     "device_act": _t_act,
     "device_open": _t_open,

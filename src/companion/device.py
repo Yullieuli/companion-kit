@@ -33,6 +33,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from . import ask as ask_mod
 from .store import Home
 from .devcdp import (BrowserError, browser_click, browser_key, browser_look,
                      browser_open, browser_swipe, browser_type, cdp_target)
@@ -61,6 +62,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "idempotent_seconds": 3,
     "timeout_seconds": 10,
     "max_screenshot_kb": 3000,
+    # 会改变他眼前环境的事，先问一声。点/打字不算——那是已经允许的上下文里做事。
+    "ask": {"enabled": True, "actions": ["open", "focus"], "targets": ["game"]},
 }
 
 
@@ -86,6 +89,7 @@ def config(home: Home) -> dict[str, Any]:
         return json.loads(json.dumps(DEFAULT_CONFIG))
     out = json.loads(json.dumps(DEFAULT_CONFIG))
     out.update({k: v for k, v in d.items() if k in DEFAULT_CONFIG})
+    out["ask"] = {**DEFAULT_CONFIG["ask"], **(d.get("ask") or {})}
     return out
 
 
@@ -272,6 +276,28 @@ def look(home: Home, target: str = "desktop", *, serial: str = "") -> dict[str, 
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
+def _ask_gate(home: Home, target: str, action: str, args: dict[str, Any],
+              ask_id: str = "") -> dict[str, Any] | None:
+    """要问就问一次。返回 None 表示放行，返回 dict 表示这次不能做。"""
+    cfg = config(home)
+    if not ask_mod.required(cfg, target, action):
+        return None
+    tok = ""
+    if ask_id and ask_mod.verify(home, ask_id, action, args, target=target):
+        tok = ask_id
+    else:
+        tok = ask_mod.token(home, action, args, target=target)
+    if tok:
+        used = ask_mod.consume(home, tok)
+        if used.get("ok"):
+            return None
+    req = ask_mod.request(home, action, args, target=target)
+    _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": target,
+                "action": action, "ok": False, "ask_required": True, "ask": req.get("id")})
+    return {"ok": False, "ask_required": True, "ask": req, "say": req.get("say"),
+            "hint": "先把这句话说出来；主人答应后用 ask_id 重试同一个动作"}
+
+
 def act(
     home: Home,
     target: str,
@@ -280,6 +306,7 @@ def act(
     *,
     is_owner: bool = True,
     serial: str = "",
+    ask_id: str = "",
 ) -> dict[str, Any]:
     args = args or {}
     v = check(home, target=target, action=action, args=args, is_owner=is_owner)
@@ -287,6 +314,12 @@ def act(
         _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": target,
                     "action": action, "ok": False, "reason": v.reason})
         return {"ok": False, "error": v.reason}
+    gate_args = args
+    if action.lower() == "focus":
+        gate_args = {"what": str(args.get("window") or args.get("text") or "")}
+    blocked = _ask_gate(home, target, action, gate_args, ask_id)
+    if blocked is not None:
+        return blocked
     key = _key(target, action, args)
     started = time.time()
     try:
@@ -336,8 +369,7 @@ def act(
             elif act_l == "key":
                 press_key(str(args.get("key") or ""))
             elif act_l == "focus":
-                return focus_window_by(home, str(args.get("window") or args.get("text") or ""),
-                                       is_owner=is_owner)
+                return _focus_apply(home, str(args.get("window") or args.get("text") or ""))
             else:
                 return {"ok": False, "error": f"{target} 不支持：{action}（click/swipe/type/key）"}
         elif target == "browser":
@@ -370,13 +402,18 @@ def act(
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
-def open_thing(home: Home, target: str, what: str, *, is_owner: bool = True) -> dict[str, Any]:
+def open_thing(home: Home, target: str, what: str, *, is_owner: bool = True,
+               ask_id: str = "") -> dict[str, Any]:
     args = {"what": what, "url": what, "package": what, "window": what}
     v = check(home, target=target, action="open", args=args, is_owner=is_owner)
     if not v.ok:
         _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": target,
                     "action": "open", "what": what, "ok": False, "reason": v.reason})
         return {"ok": False, "error": v.reason}
+    # 问的时候只带 what，别把 url/package 都塞进指纹
+    blocked = _ask_gate(home, target, "open", {"what": what}, ask_id)
+    if blocked is not None:
+        return blocked
     try:
         if target == "phone":
             how = "adb:" + phone_open(what)[-60:]
@@ -411,13 +448,22 @@ def windows_list(home: Home, limit: int = 30) -> dict[str, Any]:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
-def focus_window_by(home: Home, what: str, *, is_owner: bool = True) -> dict[str, Any]:
+def focus_window_by(home: Home, what: str, *, is_owner: bool = True,
+                    ask_id: str = "") -> dict[str, Any]:
     """把某个窗口提到前台。切之前过闸（窗口白名单 + 主人限定 + 幂等）。"""
     v = check(home, target="desktop", action="focus", args={"window": what}, is_owner=is_owner)
     if not v.ok:
         _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": "desktop",
                     "action": "focus", "what": what, "ok": False, "reason": v.reason})
         return {"ok": False, "error": v.reason}
+    blocked = _ask_gate(home, "desktop", "focus", {"what": what}, ask_id)
+    if blocked is not None:
+        return blocked
+    return _focus_apply(home, what)
+
+
+def _focus_apply(home: Home, what: str) -> dict[str, Any]:
+    """真正去切窗口。不含闸 —— 调用方负责过闸，避免一处动作问两遍。"""
     try:
         out = focus_window(what)
         _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": "desktop",

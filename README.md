@@ -104,6 +104,9 @@ companion device act --target desktop --act swipe --x 600 --y 400 --x2 600 --y2 
 companion device act --target desktop --act key --key ctrl+s
 companion device list                    # 可见窗口（按面积排）
 companion device focus --what 记事本      # 切到某个窗口（走窗口白名单）
+companion ask list                      # 她想开程序/切窗口，正在等你答应
+companion ask allow --id 1793170000-abc123
+companion device open --target desktop --what notepad --ask-id 1793170000-abc123
 companion react --mood satisfaction=12 --why "他说想听我说说" \
                 --opinion "它敢砍经验值是为了逼玩家真学招式" --opinion-tags 游戏 \
                 --memory-title 影之刃零 --memory-summary "敢砍经验值" --said "挺公道"
@@ -119,7 +122,7 @@ companion bili share BV1xx411c7mD --score 15 --reason "他肯定喜欢这个战�
 companion mcp --list                    # 列出 25 个 MCP 工具
 ```
 
-**212 个单测**，全部离线可跑（B 站用假总线，不碰网络）。其中 9 个是契约/回放：
+**223 个单测**，全部离线可跑（B 站用假总线，不碰网络）。其中 9 个是契约/回放：
 CLI、MCP、直接调用三方拼出的上下文必须逐字节一致，真实一轮的注入能按当时的时钟重建。
 
 | 层 | 做了什么 |

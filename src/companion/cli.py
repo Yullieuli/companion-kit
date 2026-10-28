@@ -331,13 +331,16 @@ def cmd_device(home: Home, args) -> int:
     elif args.action == "act":
         payload = {k: getattr(args, k) for k in ("x", "y", "x2", "y2", "text", "key", "window", "double")
                    if getattr(args, k, None) is not None}
-        out = device.act(home, args.target, args.act, payload, is_owner=not args.not_owner)
+        out = device.act(home, args.target, args.act, payload, is_owner=not args.not_owner,
+                         ask_id=args.ask_id)
     elif args.action == "open":
-        out = device.open_thing(home, args.target, args.what, is_owner=not args.not_owner)
+        out = device.open_thing(home, args.target, args.what, is_owner=not args.not_owner,
+                                ask_id=args.ask_id)
     elif args.action == "list":
         out = device.windows_list(home, args.limit)
     elif args.action == "focus":
-        out = device.focus_window_by(home, args.what or "", is_owner=not args.not_owner)
+        out = device.focus_window_by(home, args.what or "", is_owner=not args.not_owner,
+                                     ask_id=args.ask_id)
     else:  # log
         out = device.log_tail(home, args.limit)
     _dump(out if args.json else json.dumps(out, ensure_ascii=False, indent=2), args.json)
@@ -400,6 +403,22 @@ def cmd_bili(home: Home, args) -> int:
 
     _dump(out if args.json else json.dumps(out, ensure_ascii=False, indent=2), args.json)
     return 0 if (not isinstance(out, dict) or out.get("ok", True) is not False) else 1
+
+
+def cmd_ask(home: Home, args) -> int:
+    """她要动手之前先问的那一声：看列表 / 答应 / 拒绝。"""
+    from . import ask
+
+    if args.action == "list":
+        out = {"ok": True, "pending": ask.pending(home), "recent": ask.list_all(home, limit=10)}
+    elif args.action == "allow":
+        out = ask.decide(home, args.id, True)
+    elif args.action == "deny":
+        out = ask.decide(home, args.id, False)
+    else:  # pragma: no cover
+        out = {"ok": False, "why": f"不认识的动作 {args.action}"}
+    _dump(out if args.json else json.dumps(out, ensure_ascii=False, indent=2), args.json)
+    return 0 if out.get("ok") else 1
 
 
 def cmd_doctor(home: Home, args) -> int:
@@ -594,6 +613,7 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--text")
     d.add_argument("--key")
     d.add_argument("--window", help="窗口标题（focus 用）")
+    d.add_argument("--ask-id", dest="ask_id", default="", help="主人答应后拿到的那张许可")
     d.add_argument("--double", action="store_true")
     d.add_argument("--what")
     d.add_argument("--not-owner", action="store_true", help="模拟非主人会话（验闸用）")
@@ -618,6 +638,11 @@ def build_parser() -> argparse.ArgumentParser:
     bl.add_argument("--no-frames", action="store_true", help="不抽帧")
     bl.add_argument("--force", action="store_true", help="绕过每日额度与间隔")
     bl.add_argument("--json", action="store_true")
+
+    a = sub.add_parser("ask", help="她动手前的请示：列表/答应/拒绝")
+    a.add_argument("action", choices=["list", "allow", "deny"])
+    a.add_argument("--id", default="", help="请求 id（allow/deny 要）")
+    a.add_argument("--json", action="store_true")
 
     sub.add_parser("doctor", help="体检：模块/外部工具/杀软误报位置")
 
@@ -649,6 +674,7 @@ def main(argv: list[str] | None = None) -> int:
         "sticker": cmd_sticker,
         "voice": cmd_voice,
         "bili": cmd_bili,
+        "ask": cmd_ask,
         "mcp": cmd_mcp,
         "doctor": cmd_doctor,
     }
