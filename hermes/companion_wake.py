@@ -10,6 +10,11 @@ hermes 的判定是"输出变了就起会话"，而空输出现在被当作"没�
   · 一天 96 次 tick 里绝大多数是空输出，**零 token**
   · 配额、作息、心情、预算都在 companion 的 store 里，只有一本账
 
+两种"不叫醒但做事"的情况：
+  · `diary` —— 她自己写点什么，不用模型
+  · `bili`  —— 她自己刷一条，写进生活流水；下一轮有话说时会自然提起，
+    所以这里也不打印 WAKE。**不为一段视频起一次会话**，这是成本约束不是省事。
+
 测法（不激活）：
     COMPANION_HOME=/mnt/c/Users/Anran/.companion \
       ~/.companion-venv/bin/python ~/.hermes/scripts/companion_wake.py
@@ -74,6 +79,20 @@ def main() -> int:
     action = result.get("action") or "silent"
     if action in SILENT or result.get("blocked") in ("sleep", "dice", "budget", "quota"):
         return 0  # 空输出 = 不叫醒
+
+    if action == "bili":
+        # 刷片不需要模型：直接跑一轮，把「看了什么」写进生活流水。
+        # 下一轮她自然会说（没讲过的生活事件会推高"想说话"的分），
+        # 所以这里**不打印 WAKE** —— 不为一支视频起一次会话。
+        try:
+            from companion import bili
+
+            out = bili.tick(home)
+            if not out.get("ok"):
+                print(f"bili 跳过：{out.get('why')}", file=sys.stderr)
+        except Exception as e:
+            print(f"bili 失败：{type(e).__name__}: {e}", file=sys.stderr)
+        return 0
 
     reason = (result.get("why") or "").replace("|", "／")[:60]
     print(f"WAKE|{reason}|{action}")

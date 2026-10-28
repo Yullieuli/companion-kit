@@ -123,6 +123,7 @@ $COMPANION_HOME/                     # 默认 ~/.companion
 │   ├── state.json          # 今天刷了几条、最近给过哪些
 │   ├── traffic.json        # 读/写额度与风控冷静期
 │   └── credential.json     # B 站 cookie（只在本机，不进仓库）
+│   （config.json 里的 legacy_life 是迁移期只读的旧账本，旧插件下线后删掉）
 ├── shots/bili/{covers,frames}/  # 封面与九宫格抽帧
 └── logs/{turns,cost,bili}.jsonl # 每轮花了多少、B 站每次干了什么
 ```

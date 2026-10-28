@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from . import events, fence, life, opinion
@@ -47,6 +48,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "deep_read_chars": 1200,
     "frames": "auto",          # auto = 只有深读且时长 ≥8 分钟才抽帧（贵、慢）
     "share": {"max_per_day": 2, "min_score": 13, "same_days": 7, "via": "qq"},
+    # 迁移期用：旧 bili-whale 插件的账本还活着，只读它、不写它。
+    # 不读就会重演"同一期视频推两次"；写了就成了双写。等旧插件下线，删掉这个键即可。
+    "legacy_life": [],
     "taste": {
         "like": ["极客湾", "影之刃", "独立游戏", "纪录片", "手工", "科普", "拆解", "评测"],
         "dislike": ["营销号", "标题党", "擦边", "搬运", "切片", "合集"],
@@ -150,16 +154,75 @@ def grams(text: str, n: int = 3) -> set[str]:
 
 # ── 看过什么（唯一账本：life）─────────────────────────────────────────────────
 
-def watched(home: Home, *, hours: float = 72, now: datetime | None = None) -> tuple[set[str], set[str]]:
+def _legacy_watched(paths: list[str], *, hours: float,
+                    now: datetime) -> tuple[set[str], set[str], set[str]]:
+    """只读旧账本（bili-whale 的 life.jsonl / own_life.json）。
+
+    这是迁移期的桥，不是设计。它解决一个很具体的问题：
+    旧址记着「今天 14:39 看过小米电视」，新址不知道，于是又推一遍同一期。
+    读两份、写一份 —— 写永远只有 life 一处。
+    """
+    import json
+
+    cut = now.timestamp() - hours * 3600
+    bvids: set[str] = set()
+    frags: set[str] = set()
+    cores: set[str] = set()
+    for raw in paths or []:
+        p = Path(str(raw)).expanduser()
+        try:
+            text = p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        rows: list[dict[str, Any]] = []
+        if p.suffix == ".jsonl":
+            for line in text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except Exception:
+                    continue
+        else:
+            try:
+                rows = list((json.loads(text) or {}).get("history") or [])
+            except Exception:
+                rows = []
+        for r in rows:
+            ts = str(r.get("ts") or r.get("at") or "")
+            ep = float(r.get("epoch") or 0)
+            if not ep and ts:
+                for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S"):
+                    try:
+                        ep = datetime.strptime(ts[:19], fmt).timestamp()
+                        break
+                    except Exception:
+                        continue
+            if ep < cut:
+                continue
+            blob = f"{r.get('title') or ''} {r.get('text') or ''} {r.get('detail') or ''}"
+            m = BV_RE.search(blob)
+            if m:
+                bvids.add(m.group(0))
+            body = _core(blob.replace(m.group(0), "") if m else blob)
+            frags |= grams(body)
+            if body:
+                cores.add(body)
+    return bvids, frags, cores
+
+
+def watched(home: Home, *, hours: float = 72, now: datetime | None = None,
+            cfg: dict[str, Any] | None = None) -> tuple[set[str], set[str], set[str]]:
     """返回 (看过的 bvid, 看过的标题 3-gram)。
 
-    只读 life。旧账本（hermes 的 proactive/life.jsonl）已经迁过来了，
-    再读两个源就会重演"同一期视频推两次"。
+    主账本是 life 一处。迁移期再并上配置里列的旧账本（只读）。
     """
     now = now or datetime.now()
     cut = now.timestamp() - hours * 3600
     bvids: set[str] = set()
     frags: set[str] = set()
+    cores: set[str] = set()
     for r in home.read_jsonl("life/life.jsonl", limit=100000):
         if float(r.get("epoch") or 0) < cut:
             continue
@@ -170,11 +233,34 @@ def watched(home: Home, *, hours: float = 72, now: datetime | None = None) -> tu
             bv = m.group(0) if m else ""
         if bv.startswith("BV"):
             bvids.add(bv)
-        frags |= grams(_core(blob.replace(bv, "")))
-    return bvids, frags
+        body = _core(blob.replace(bv, ""))
+        frags |= grams(body)
+        if body:
+            cores.add(body)
+    legacy = (cfg or {}).get("legacy_life") or []
+    if legacy:
+        lb, lf, lc = _legacy_watched(legacy, hours=hours, now=now)
+        bvids |= lb
+        frags |= lf
+        cores |= lc
+    return bvids, frags, cores
 
 
-def looks_watched(title: str, frags: set[str], need: int = 2) -> bool:
+def looks_watched(title: str, frags: set[str], need: int = 3,
+                  cores: set[str] | None = None) -> bool:
+    """标题像不像"已经看过的那一条"。
+
+    阈值定 3 是权衡过的：
+      2 太松 —— "影之刃零 新预告"会因为旧记录里有"影之刃零评测"而被挡，
+                等于把她最喜欢的方向封三天（实测踩到过）
+      4 太紧 —— 旧记录只有一句描述，长标题凑不满 4 个共同 3-gram
+    真正的同一期视频有大量重合，3 足够；同题不同片只重合 2。
+    """
+    core = _core(title)
+    # 短标题（4–6 字，比如「双人抬棺」）凑不出 3 个共同片段，
+    # 但只要整串被看过的那句描述包含，就是同一条。长标题不走这条，免得误伤。
+    if cores and 4 <= len(core) <= 12 and any(core in c or c in core for c in cores):
+        return True
     if not frags:
         return False
     return len(grams(title) & frags) >= need
@@ -278,7 +364,7 @@ def pick(items: list[dict[str, Any]], home: Home, st: dict[str, Any], cfg: dict[
          now: datetime | None = None) -> dict[str, Any]:
     """去重 → 打分 → 选一条。选不出来就诚实地说选不出来。"""
     now = now or datetime.now()
-    seen_bv, seen_frag = watched(home, hours=72, now=now)
+    seen_bv, seen_frag, seen_cores = watched(home, hours=72, now=now, cfg=cfg)
     served_cut = now.timestamp() - 24 * 3600
     fresh: list[dict[str, Any]] = []
     for it in items:
@@ -286,7 +372,7 @@ def pick(items: list[dict[str, Any]], home: Home, st: dict[str, Any], cfg: dict[
             continue
         if float((st.get("served", {}).get(it["bvid"]) or {}).get("at") or 0) > served_cut:
             continue
-        if looks_watched(it["title"], seen_frag):
+        if looks_watched(it["title"], seen_frag, cores=seen_cores):
             continue
         it = {**it, "score": score(it, cfg, home)}
         fresh.append(it)

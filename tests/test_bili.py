@@ -109,17 +109,45 @@ class WatchedTest(Base):
         self.assertTrue(bili.looks_watched("影之刃零试玩：武侠朋克", frags))
         self.assertFalse(bili.looks_watched("猫咪日常", frags))
 
+    def test_same_topic_but_new_video_is_not_blocked(self):
+        # 只看过「影之刃零评测」，不代表不能看「影之刃零新预告」
+        frags = bili.grams("看IGN中国《影之刃零》评测10/10，抽帧看武侠朋克")
+        self.assertFalse(bili.looks_watched("影之刃零 新预告", frags))
+        self.assertTrue(bili.looks_watched("影之刃零 评测10/10 抽帧看武侠朋克", frags))
+
+    def test_short_title_matches_by_containment(self):
+        # 「双人抬棺」只有 4 个字，凑不出 3 个共同 3-gram，只能整串比
+        cores = {"刷站热门下载了双人抬棺FallbearersZ贤者抽帧九宫格两张看清黑白哥特手绘"}
+        self.assertTrue(bili.looks_watched("双人抬棺", {"影之刃"}, cores=cores))
+        self.assertFalse(bili.looks_watched("双人抬棺新的独立游戏", {"影之刃"}, cores=cores))
+
     def test_watched_reads_life_only(self):
         life.record(self.home, "刷B站，看了《A》", kind="watch",
                     at=NOW, extra={"bvid": "BV1xx411c7mD"})
-        bv, frags = bili.watched(self.home, now=NOW)
+        bv, frags, _cores = bili.watched(self.home, now=NOW)
         self.assertIn("BV1xx411c7mD", bv)
         self.assertTrue(frags)
 
     def test_old_rows_without_bvid_field_still_count(self):
         life.record(self.home, "刷B站，看了《影之刃零》BV1xx411c7mD", kind="watch", at=NOW)
-        bv, _ = bili.watched(self.home, now=NOW)
+        bv, _f, _c = bili.watched(self.home, now=NOW)
         self.assertIn("BV1xx411c7mD", bv)
+
+    def test_legacy_ledger_is_read_not_written(self):
+        legacy = self.home.root / "legacy_life.jsonl"
+        legacy.write_text(json.dumps({
+            "ts": "2026-10-28 14:39", "epoch": NOW.timestamp() - 3600,
+            "kind": "watch", "text": "极客湾『小米电视 S Pro 2027上手体验』",
+        }, ensure_ascii=False) + "\n", encoding="utf-8")
+        cfg = bili.config(self.home)
+        cfg["legacy_life"] = [str(legacy)]
+        _, frags, _c = bili.watched(self.home, now=NOW, cfg=cfg)
+        self.assertTrue(bili.looks_watched("小米电视 S Pro 上手", frags))
+        # 只读：旧文件不该被改动
+        before = legacy.read_text(encoding="utf-8")
+        bili.tick(self.home, net=FakeNet([item("BV1xx411c7mQ", "极客湾：掌机横评")]),
+                  cfg=cfg, now=NOW)
+        self.assertEqual(legacy.read_text(encoding="utf-8"), before)
 
 
 class ScoreTest(Base):
