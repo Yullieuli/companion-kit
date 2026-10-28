@@ -157,6 +157,15 @@ class ScoreTest(Base):
         bad = bili.score(item("BV1xx411c7mD", "营销号标题党合集", dur=600), cfg, self.home)
         self.assertGreater(good, bad)
 
+    def test_hype_titles_get_penalized(self):
+        cfg = bili.config(self.home)
+        plain = bili.score(item("BV1xx411c7mD", "影之刃零 评测：战斗系统讲透了", dur=600), cfg, self.home)
+        hyped = bili.score(item("BV1xx411c7mD", "影之刃零评测！！😅🤏🤪你的硬核根本没技巧🤪", dur=600), cfg, self.home)
+        self.assertLess(hyped, plain)
+        self.assertLessEqual(bili.hype_penalty("😅🤪😱标题"), -2)
+        self.assertLessEqual(bili.hype_penalty("真的吗？？"), -1)
+        self.assertEqual(bili.hype_penalty("极客湾：掌机横评"), 0)
+
     def test_opinion_bonus_uses_tags_only(self):
         from companion import opinion
 

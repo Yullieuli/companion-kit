@@ -293,6 +293,26 @@ def opinion_bonus(home: Home, blob: str) -> int:
     return min(bonus, 6)
 
 
+def hype_penalty(title: str) -> int:
+    """标题党信号：emoji 堆砌、连串感叹号、全大写吼叫。
+
+    为什么需要它：关键词打分只看"讲了什么"，不看"怎么讲的"。
+    实测踩到：一条"炮轰AI科普乱象！😅🤏🤪"因为含"科普"被选中，
+    点进去是三十秒情绪输出。这种标题有稳定特征，用便宜的规则挡掉。
+    """
+    t = str(title or "")
+    emoji = sum(1 for ch in t if ord(ch) > 0x1F000 or 0x2600 <= ord(ch) <= 0x27BF)
+    n = 0
+    if emoji >= 2:
+        n -= 2
+    if "！！" in t or "!!" in t or "??" in t or "？？" in t:
+        n -= 1
+    letters = [c for c in t if c.isascii() and c.isalpha()]
+    if len(letters) >= 8 and all(c.isupper() for c in letters):
+        n -= 1
+    return n
+
+
 def score(item: dict[str, Any], cfg: dict[str, Any], home: Home) -> int:
     blob = f"{item.get('title', '')} {item.get('up', '')}".lower()
     n = 0
@@ -310,6 +330,7 @@ def score(item: dict[str, Any], cfg: dict[str, Any], home: Home) -> int:
     elif dur and dur < lo:
         n -= 1
     n += opinion_bonus(home, blob)
+    n += hype_penalty(str(item.get("title") or ""))
     return n
 
 
