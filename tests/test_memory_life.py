@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 
 import sys
 import tempfile
@@ -186,3 +187,36 @@ class LifeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TurnsRotateTest(unittest.TestCase):
+    """turns 会一直长，必须轮转；不轮转一年几万行，备份和 grep 都变脏。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_trim_keeps_tail(self):
+        from companion import react as react_mod
+
+        p = self.home.root / "logs/turns.jsonl"
+        rows = [{"at": f"2026-10-28T10:{i % 60:02d}:00", "role": "assistant", "said": f"第{i}句",
+                 "pad": "x" * 100} for i in range(2100)]
+        p.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+        react_mod._trim_turns(self.home, keep=2000)
+        left = p.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(left), 2000)
+        self.assertIn("第2099句", left[-1])
+        self.assertNotIn("第0句", left[0])
+
+    def test_trim_noop_when_small(self):
+        from companion import react as react_mod
+
+        p = self.home.root / "logs/turns.jsonl"
+        p.write_text('{"said": "只有一句"}\n', encoding="utf-8")
+        react_mod._trim_turns(self.home, keep=2000)
+        self.assertEqual(len(p.read_text(encoding="utf-8").splitlines()), 1)

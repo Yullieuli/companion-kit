@@ -22,6 +22,27 @@ from . import events, fence, life, memory, mood as mood_mod, opinion, people
 from .store import Home
 
 
+TURNS = "logs/turns.jsonl"
+TURNS_KEEP = 2000
+
+
+def _trim_turns(home: Home, keep: int = TURNS_KEEP) -> None:
+    """把 turns 控制在 last `keep` 行。
+
+    不轮转的话它一年长到几万行：`read_jsonl` 只读尾部所以不影响性能，
+    但备份、grep、git（有人会把这个目录纳入版本管理）都会变慢变脏。
+    """
+    p = home.root / TURNS
+    try:
+        if not p.exists() or p.stat().st_size < keep * 120:
+            return
+        lines = p.read_text(encoding="utf-8").splitlines()
+        if len(lines) > keep:
+            p.write_text("\n".join(lines[-keep:]) + "\n", encoding="utf-8")
+    except Exception:
+        return
+
+
 def _mood(home: Home, delta: dict[str, float], why: str, now: datetime) -> dict[str, Any]:
     before = home.mood()
     after = mood_mod.apply_delta(before, delta, why=why, now=now)
@@ -125,6 +146,7 @@ def react(
         changed.append("said")
 
     # 每轮都留一条 turn：注入了什么、她说了什么、花了多少
+    _trim_turns(home)
     home.append_jsonl("logs/turns.jsonl", {
         "at": now.isoformat(timespec="seconds"),
         "role": "assistant",

@@ -141,6 +141,23 @@ def cmd_cost(home: Home, args) -> int:
     return 0
 
 
+def cmd_turns(home: Home, args) -> int:
+    """她最近说过什么。给"我刚才是不是已经说过这句"用，也可用来回看语气。"""
+    rows = [r for r in home.read_jsonl("logs/turns.jsonl", limit=500) if r.get("role") == "assistant"]
+    rows = rows[-args.limit:]
+    if args.json:
+        _dump(rows, True)
+        return 0
+    if not rows:
+        print("（还没有记录）")
+        return 0
+    for r in rows:
+        at = str(r.get("at") or "")[5:16].replace("T", " ")
+        said = str(r.get("said") or "").replace("\n", " ")
+        print(f"{at}  {said[:80]}")
+    return 0
+
+
 def cmd_say(home: Home, args) -> int:
     payload = {"text": args.text, "channel": args.channel or "default", "dry_run": True}
     _dump(payload, args.json)
@@ -565,6 +582,9 @@ def build_parser() -> argparse.ArgumentParser:
     co = sub.add_parser("cost", help="今日花费 / 某任务的模型档位")
     co.add_argument("task", nargs="?", default="", help="任务名（如 bili_pick / bili_debrief / chat）")
 
+    tn = sub.add_parser("turns", help="她最近说过什么")
+    tn.add_argument("--limit", type=int, default=10)
+
     s = sub.add_parser("say", help="记一句她想说的话")
     s.add_argument("--text", required=True)
     s.add_argument("--channel")
@@ -735,6 +755,7 @@ def main(argv: list[str] | None = None) -> int:
         "events": cmd_events,
         "cost": cmd_cost,
         "status": cmd_status,
+        "turns": cmd_turns,
         "say": cmd_say,
         "memory": cmd_memory,
         "life": cmd_life,

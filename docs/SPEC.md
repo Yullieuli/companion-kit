@@ -1,6 +1,6 @@
 # 规格：companion-kit（跨 agent 的伴侣运行时）
 
-> 状态：**实施中**（0.6.0）。逐项完成情况见 §12。
+> 状态：**实施中**（0.6.1）。逐项完成情况见 §12。
 > 目标读者：未来的我、以及任何要接手这套东西的人。
 
 ## 1. 一句话
@@ -91,6 +91,13 @@ GET /context?session=xxx&channel=qq:group:123&budget=2500
 5. 生活事件（近 24h，未反应优先）
 
 **投影去重**：每块算 hash，宿主侧缓存；未变化不重复注入（省 token 的关键）。
+
+**两处有意偏差（不改，附理由）**
+
+| 规格 | 实现 | 为什么保留实现 |
+|---|---|---|
+| `people/<channel>-<uid>.md` | `people/*.json` | 人物卡里的 `closeness` / `tags` / `last_seen` 是代码高频读写的字段，放进 markdown 要么每次正则解析、要么写回去时破坏人写的排版。人基本不改这文件，机器的需求优先 |
+| `life/<yymmdd>/events.json` | `life/life.jsonl` 单文件 | 读它的是 pulse / said / migrate / bili 去重，都是"取最近 N 条/最近 72 小时"。按日目录要额外维护索引，跨天查询还得先扫目录；单文件 + 尾部读取更简单也更难写坏。需要按天看时 `companion life recent --days 1` 已经够 |
 
 **编年史只有一本（10-28 起）**：写入统一走 `life/life.jsonl`。旧的
 `~/.hermes/proactive/life.jsonl` 降级成**只读投影**——`life.py record` 先写 companion，
@@ -330,7 +337,7 @@ MCP 工具（三个，不拆细）：
 | §5.1 MCP 工具 | ✅ | 规格 8 个全部覆盖（context / life / card / wake / say / react / mood / bili）；对外 25 个工具 |
 | §5.2 Context 注入 | 🟡 | 五块（+ 观点共六块）、优先级、预算、块 hash 都在；**投影去重（`context.Cache`）尚无宿主调用** |
 | §5.3 事件订阅 | 🟡 | append-only + cursor + 长轮询 ✅；`wake_due` / `spend_guard` / `mood_shift` 都会发；**HTTP `/events` ❌** |
-| §5.4 文件协议 | 🟡 | 结构与规格有两处偏差：`people/*.json`（规格为 `.md`）、`life/life.jsonl`（规格为按日目录）。`opinions.jsonl` ✅、`bili/*` ✅。**编年史已收成一本**：`life/life.jsonl` 是唯一账本，旧 `proactive/life.jsonl` 降级为只读投影（迁移期给老读者看） |
+| §5.4 文件协议 | ✅ | `opinions.jsonl` / `bili/*` / 编年史（`life/life.jsonl` 唯一账本，旧 `proactive/life.jsonl` 只读投影）都符合；两处**有意偏差**见下（`people` 用 json、`life` 用单文件） |
 | §5.5 设备控制 | ✅ | 四类目标 + Screen/Input 双 port，五道闸 + `ask` 请示闸；`swipe`/`key`（桌面 SendInput + 浏览器 CDP）、窗口列表/切前台、游戏前台校验 + 坐标换算、窗口级截图（PrintWindow，被盖住也能抓）、`Observe`（本地 tesseract OCR，中文实测可用；无引擎时交宿主的 vision）、动作前后两张图（`before=true`）全部就绪。双屏按虚拟桌面取尺寸与原点；截图只留最近 60 张 / 7 天。宿主在 WSL 时 `device` 自动转发给 Windows 侧同一份代码（`devdelegate`），截图在 Windows 拍、OCR 在 WSL 认 |
 | §5.6 语音 | 🟡 | TTS ✅、唱歌降级版 ✅、边界闸 ✅；SVC ❌（明确 P3） |
 | §5.7 成本 | 🟡 | 前缀分层 / 事件门 / 本地先做 / 预算闸 ✅；分级模型 ✅（三档当前统一 `agnes-3.0-flash`，档位只决定估价；可在 `cost/route.json` 按任务升档）；块级去重只在 `Cache` 里，宿主尚未真正使用 |
@@ -341,8 +348,8 @@ MCP 工具（三个，不拆细）：
 
 ### 剩余工作的优先级
 
-1. `people/*.json` → `.md`、`life` 按日目录（§5.4 的两处偏差）
-2. §5.6 P3：真 SVC 唱歌（需要音色模型与显存）
-3. 块级去重真正接到宿主（`Cache` 已有，dsh/hermes 还没用它裁剪注入）
+1. §5.6 P3：真 SVC 唱歌（需要音色模型与显存）
+2. 块级去重真正接到宿主（`Cache` 已有，dsh/hermes 还没用它裁剪注入）
+3. 记忆蒸馏：`memory` 目前 0 页 —— 需要一次便宜的模型调用把对话沉淀成页（未做，成本待定）
 4. OCR 引擎：WSL 侧已装 `tesseract-ocr` + `chi_sim`（实测"设置 通用 音量"置信 96.6）；Windows 侧未装，那边会如实返回 `backend=none` 交给 vision
-5. ~~设备补齐~~ ✅ · ~~分级模型映射~~ ✅ · ~~旧账本停产~~ ✅
+5. ~~设备补齐~~ ✅ · ~~分级模型映射~~ ✅ · ~~旧账本停产~~ ✅ · ~~文件协议两处偏差~~ ✅（改为有意保留）
