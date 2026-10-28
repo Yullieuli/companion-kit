@@ -326,7 +326,7 @@ MCP 工具（三个，不拆细）：
 | §5.2 Context 注入 | 🟡 | 五块（+ 观点共六块）、优先级、预算、块 hash 都在；**投影去重（`context.Cache`）尚无宿主调用** |
 | §5.3 事件订阅 | 🟡 | append-only + cursor + 长轮询 ✅；`wake_due` / `spend_guard` / `mood_shift` 都会发；**HTTP `/events` ❌** |
 | §5.4 文件协议 | 🟡 | 结构与规格有两处偏差：`people/*.json`（规格为 `.md`）、`life/life.jsonl`（规格为按日目录）。`opinions.jsonl` ✅、`bili/*`（配置/状态/额度/凭证）✅ |
-| §5.5 设备控制 | 🟡 | 四类目标 + Screen/Input 双 port ✅，五道闸 ✅；**缺** `swipe`/`key`（桌面与浏览器）、`App.list/focus`、`Observe(ocr/describe)`、游戏的窗口捕获与坐标映射；`device_act` 只回执行后一张图 |
+| §5.5 设备控制 | 🟡 | 四类目标 + Screen/Input 双 port ✅，五道闸 ✅；`swipe`/`key`（桌面 SendInput + 浏览器 CDP）✅、窗口列表/切前台 ✅、游戏前台校验 + 坐标换算 ✅；**缺** `Observe(ocr/describe)` 与窗口级截图；`device_act` 只回执行后一张图 |
 | §5.6 语音 | 🟡 | TTS ✅、唱歌降级版 ✅、边界闸 ✅；SVC ❌（明确 P3） |
 | §5.7 成本 | 🟡 | 前缀分层 / 事件门 / 本地先做 / 预算闸 ✅；块级去重未接线、分级模型只有价格表无任务映射 |
 | §5.8 自主性 | 🟡 | 七候选（含刷 B 站）+ 硬闸 + 便宜优先 ✅；说话额度用尽时仍可日记/刷片；**缺** `ask` 流程、改记忆的 never 闸 |

@@ -34,10 +34,11 @@ from pathlib import Path
 from typing import Any
 
 from .store import Home
-from .devcdp import (BrowserError, browser_click, browser_look, browser_open,
-                     browser_type, cdp_target)
-from .devwin import (DesktopError, click, foreground, screen_size,
-                     screenshot_desktop, type_text)
+from .devcdp import (BrowserError, browser_click, browser_key, browser_look,
+                     browser_open, browser_swipe, browser_type, cdp_target)
+from .devwin import (DesktopError, click, drag, focus as focus_window, foreground,
+                     key as press_key, screen_size, screenshot_desktop, type_text,
+                     window_rect, windows as list_windows)
 from .imgpng import _shot_path, write_png
 
 
@@ -106,6 +107,17 @@ def _norm(s: str) -> str:
     return (s or "").strip().lower()
 
 
+def map_point(x: float, y: float, design: tuple[int, int], screen: tuple[int, int]) -> tuple[int, int]:
+    """把「设计分辨率下的坐标」换成「当前屏幕坐标」。
+
+    游戏为什么必须做这一步：攻略写的是 1920×1080 的第 960 个像素，
+    而他的屏幕可能是 2560×1440 的窗口模式。差 1.33 倍，点下去就是另一个按钮。
+    """
+    dw, dh = max(1, int(design[0])), max(1, int(design[1]))
+    sw, sh = max(1, int(screen[0])), max(1, int(screen[1]))
+    return int(round(float(x) * sw / dw)), int(round(float(y) * sh / dh))
+
+
 def check(
     home: Home,
     *,
@@ -130,7 +142,9 @@ def check(
             return Verdict(False, f"危险动作被拒：出现「{w}」。这类事必须本人亲手做")
 
     allow = (cfg.get("allow") or {}).get(target) or {}
-    keys = {"open": ("packages", "windows", "domains"), "launch": ("packages", "windows", "domains")}.get(action, ())
+    keys = {"open": ("packages", "windows", "domains"),
+            "launch": ("packages", "windows", "domains"),
+            "focus": ("windows",)}.get(action, ())
     for k in keys:
         listed = [str(x).lower() for x in (allow.get(k) or [])]
         if not listed:
@@ -241,7 +255,11 @@ def look(home: Home, target: str = "desktop", *, serial: str = "") -> dict[str, 
             meta = {"cdp": bool(cdp_target())}
         elif target in ("desktop", "game"):
             p = screenshot_desktop(home, target)
-            meta = {"foreground": foreground(), "screen": list(screen_size())}
+            try:
+                tops = [w["title"] for w in list_windows(6)]
+            except Exception:
+                tops = []
+            meta = {"foreground": foreground(), "screen": list(screen_size()), "windows": tops}
         else:
             return {"ok": False, "error": f"不认识的目标：{target}（phone/desktop/browser/game）"}
         size_kb = max(1, p.stat().st_size // 1024)
@@ -284,19 +302,56 @@ def act(
             else:
                 return {"ok": False, "error": f"phone 不支持：{action}"}
         elif target in ("desktop", "game"):
-            if action in ("tap", "click"):
-                click(args["x"], args["y"], double=bool(args.get("double")))
-            elif action in ("type", "text"):
+            cfg = config(home)
+            act_l = action.lower()
+            # 游戏按「设计分辨率 + 窗口偏移」换算坐标；桌面就是屏幕坐标，不动
+            def _pt(px: Any, py: Any) -> tuple[int, int]:
+                if target != "game":
+                    return int(px), int(py)
+                g = cfg.get("game") or {}
+                design = tuple(g.get("design") or (1920, 1080))
+                want = str(g.get("window") or "")
+                rect = window_rect(want) if want else {}
+                screen = (rect.get("w") or screen_size()[0], rect.get("h") or screen_size()[1])
+                mx, my = map_point(px, py, (int(design[0]), int(design[1])), screen)
+                return mx + int(rect.get("x") or 0), my + int(rect.get("y") or 0)
+
+            if act_l in ("tap", "click", "swipe"):
+                if "x" not in args or "y" not in args:
+                    return {"ok": False, "error": f"{act_l} 需要 x / y"}
+                if target == "game":
+                    want = str((cfg.get("game") or {}).get("window") or "")
+                    fg = foreground()
+                    if want and want.lower() not in fg.lower():
+                        return {"ok": False,
+                                "error": f"游戏不在前台（当前是「{fg}」）→ 输入会打到别的窗口，先 device focus"}
+                x1, y1 = _pt(args["x"], args["y"])
+                if act_l == "swipe":
+                    x2, y2 = _pt(args.get("x2", args["x"]), args.get("y2", args["y"]))
+                    drag(x1, y1, x2, y2, ms=int(args.get("ms", 300)))
+                else:
+                    click(x1, y1, double=bool(args.get("double")))
+            elif act_l in ("type", "text"):
                 type_text(str(args.get("text", "")))
+            elif act_l == "key":
+                press_key(str(args.get("key") or ""))
+            elif act_l == "focus":
+                return focus_window_by(home, str(args.get("window") or args.get("text") or ""),
+                                       is_owner=is_owner)
             else:
-                return {"ok": False, "error": f"{target} 不支持：{action}（只做点击/输入）"}
+                return {"ok": False, "error": f"{target} 不支持：{action}（click/swipe/type/key）"}
         elif target == "browser":
-            if action in ("tap", "click"):
+            act_l = action.lower()
+            if act_l in ("tap", "click"):
                 browser_click(args["x"], args["y"])
-            elif action in ("type", "text"):
+            elif act_l == "swipe":
+                browser_swipe(args["x"], args["y"], args.get("x2", args["x"]), args.get("y2", args["y"]))
+            elif act_l in ("type", "text"):
                 browser_type(str(args.get("text", "")))
+            elif act_l == "key":
+                browser_key(str(args.get("key") or ""))
             else:
-                return {"ok": False, "error": f"browser 不支持：{action}"}
+                return {"ok": False, "error": f"browser 不支持：{action}（click/swipe/type/key）"}
         else:
             return {"ok": False, "error": f"不认识的目标：{target}"}
 
@@ -342,6 +397,35 @@ def open_thing(home: Home, target: str, what: str, *, is_owner: bool = True) -> 
     except Exception as e:
         _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": target,
                     "action": "open", "what": what, "ok": False, "reason": str(e)})
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def windows_list(home: Home, limit: int = 30) -> dict[str, Any]:
+    """列可见窗口。只读标题，不过闸 —— 但也不给句柄之外的任何能力。"""
+    try:
+        rows = list_windows(limit)
+        _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": "desktop",
+                    "action": "list", "ok": True, "n": len(rows)})
+        return {"ok": True, "windows": rows, "foreground": foreground()}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def focus_window_by(home: Home, what: str, *, is_owner: bool = True) -> dict[str, Any]:
+    """把某个窗口提到前台。切之前过闸（窗口白名单 + 主人限定 + 幂等）。"""
+    v = check(home, target="desktop", action="focus", args={"window": what}, is_owner=is_owner)
+    if not v.ok:
+        _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": "desktop",
+                    "action": "focus", "what": what, "ok": False, "reason": v.reason})
+        return {"ok": False, "error": v.reason}
+    try:
+        out = focus_window(what)
+        _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": "desktop",
+                    "action": "focus", "what": what, "ok": True, "title": out.get("title")})
+        return out
+    except Exception as e:
+        _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": "desktop",
+                    "action": "focus", "what": what, "ok": False, "reason": str(e)})
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 

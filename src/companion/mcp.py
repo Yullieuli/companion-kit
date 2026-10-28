@@ -117,12 +117,13 @@ TOOLS: list[Tool] = [
              "force": {"type": "boolean"}}, []),
     _schema("device_look", "看屏幕：截图并返回路径与前台窗口。target 选 phone/desktop/browser/game。",
             {"target": {"type": "string", "enum": ["phone", "desktop", "browser", "game"], "default": "desktop"}}),
-    _schema("device_act", "在屏幕上做一个动作（点/滑/打字），返回执行后的截图。危险动作会被拒。",
+    _schema("device_act", "在屏幕上做一个动作（点/滑动/打字/按键/切窗口），返回执行后的截图。危险动作会被拒。",
             {"target": {"type": "string", "enum": ["phone", "desktop", "browser", "game"]},
-             "action": {"type": "string", "enum": ["tap", "click", "swipe", "type", "key"]},
+             "action": {"type": "string", "enum": ["tap", "click", "swipe", "type", "key", "focus"]},
              "x": {"type": "integer"}, "y": {"type": "integer"},
              "x2": {"type": "integer"}, "y2": {"type": "integer"},
-             "text": {"type": "string"}, "key": {"type": "string"}, "double": {"type": "boolean"}},
+             "text": {"type": "string"}, "key": {"type": "string"}, "window": {"type": "string"},
+             "double": {"type": "boolean"}},
             ["target", "action"]),
     _schema("device_open", "打开一个 App / 网址 / 程序（走白名单）。",
             {"target": {"type": "string", "enum": ["phone", "desktop", "browser", "game"]},
@@ -343,7 +344,7 @@ def _t_look(home: Home, a: dict[str, Any]) -> dict[str, Any]:
 
 
 def _t_act(home: Home, a: dict[str, Any]) -> dict[str, Any]:
-    args = {k: a[k] for k in ("x", "y", "x2", "y2", "text", "key", "double") if k in a}
+    args = {k: a[k] for k in ("x", "y", "x2", "y2", "text", "key", "window", "double") if k in a}
     return device.act(home, a["target"], a["action"], args, is_owner=bool(a.get("is_owner", True)))
 
 

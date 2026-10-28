@@ -328,10 +328,15 @@ def cmd_device(home: Home, args) -> int:
     if args.action == "look":
         out = device.look(home, args.target)
     elif args.action == "act":
-        payload = {k: getattr(args, k) for k in ("x", "y", "x2", "y2", "text", "key", "double") if getattr(args, k, None) is not None}
+        payload = {k: getattr(args, k) for k in ("x", "y", "x2", "y2", "text", "key", "window", "double")
+                   if getattr(args, k, None) is not None}
         out = device.act(home, args.target, args.act, payload, is_owner=not args.not_owner)
     elif args.action == "open":
         out = device.open_thing(home, args.target, args.what, is_owner=not args.not_owner)
+    elif args.action == "list":
+        out = device.windows_list(home, args.limit)
+    elif args.action == "focus":
+        out = device.focus_window_by(home, args.what or "", is_owner=not args.not_owner)
     else:  # log
         out = device.log_tail(home, args.limit)
     _dump(out if args.json else json.dumps(out, ensure_ascii=False, indent=2), args.json)
@@ -577,15 +582,16 @@ def build_parser() -> argparse.ArgumentParser:
     sk.add_argument("--name", default="")
 
     d = sub.add_parser("device", help="手：看屏幕 / 动作 / 打开")
-    d.add_argument("action", choices=["look", "act", "open", "log"])
+    d.add_argument("action", choices=["look", "act", "open", "list", "focus", "log"])
     d.add_argument("--target", default="desktop", choices=["phone", "desktop", "browser", "game"])
-    d.add_argument("--act", default="tap", choices=["tap", "click", "swipe", "type", "key"])
+    d.add_argument("--act", default="tap", choices=["tap", "click", "swipe", "type", "key", "focus"])
     d.add_argument("--x", type=int)
     d.add_argument("--y", type=int)
     d.add_argument("--x2", type=int)
     d.add_argument("--y2", type=int)
     d.add_argument("--text")
     d.add_argument("--key")
+    d.add_argument("--window", help="窗口标题（focus 用）")
     d.add_argument("--double", action="store_true")
     d.add_argument("--what")
     d.add_argument("--not-owner", action="store_true", help="模拟非主人会话（验闸用）")

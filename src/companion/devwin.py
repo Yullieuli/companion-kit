@@ -9,6 +9,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from .imgpng import _shot_path, write_png
 
@@ -146,5 +147,127 @@ def type_text(text: str) -> None:
             inp.ki.dwFlags = flags
             u.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
             time.sleep(0.004)
+
+
+def drag(x1: int, y1: int, x2: int, y2: int, *, ms: int = 300, steps: int = 12) -> None:
+    """按住拖动。给「滑屏 / 拖拽 / 拉进度条」用。
+
+    为什么用插值而不是一次跳过去：多数程序只在 WM_MOUSEMOVE 的连续帧里
+    才认得出这是一次拖动，一步跳到终点会被当成点击。
+    """
+    ctypes, _, u, _ = _win()
+    LEFTDOWN, LEFTUP = 0x0002, 0x0004
+    delay = max(0.008, (ms / 1000) / max(1, steps))
+    u.SetCursorPos(int(x1), int(y1))
+    time.sleep(0.06)
+    u.mouse_event(LEFTDOWN, 0, 0, 0, 0)
+    try:
+        for i in range(1, steps + 1):
+            u.SetCursorPos(int(x1 + (x2 - x1) * i / steps), int(y1 + (y2 - y1) * i / steps))
+            time.sleep(delay)
+    finally:
+        u.mouse_event(LEFTUP, 0, 0, 0, 0)
+
+
+# 组合键能用的名字。写全一点，省得她猜「回车该写什么」
+VK = {
+    "enter": 0x0D, "return": 0x0D, "tab": 0x09, "esc": 0x1B, "escape": 0x1B,
+    "space": 0x20, "backspace": 0x08, "delete": 0x2E, "insert": 0x2D,
+    "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27,
+    "home": 0x24, "end": 0x23, "pageup": 0x21, "pagedown": 0x22,
+    "ctrl": 0x11, "control": 0x11, "shift": 0x10, "alt": 0x12, "win": 0x5B,
+    "capslock": 0x14, "printscreen": 0x2C,
+}
+KEYUP = 0x0002
+
+
+def _vk(name: str) -> int:
+    n = name.strip().lower()
+    if n in VK:
+        return VK[n]
+    if len(n) == 1 and n.isalnum():
+        return ord(n.upper())
+    if n.startswith("f") and n[1:].isdigit() and 1 <= int(n[1:]) <= 24:
+        return 0x70 + int(n[1:]) - 1
+    raise DesktopError(f"不认识的键：{name}（可用：单个字母数字、f1-f24、enter/esc/tab/space/方向键/ctrl/shift/alt）")
+
+
+def key(combo: str) -> None:
+    """按一个键或一组组合键：`enter` / `ctrl+s` / `alt+tab`。"""
+    _, _, u, _ = _win()
+    parts = [p for p in str(combo or "").replace(" ", "").split("+") if p]
+    if not parts:
+        raise DesktopError("没给键名")
+    codes = [_vk(p) for p in parts]
+    for c in codes:
+        u.keybd_event(c, 0, 0, 0)
+        time.sleep(0.02)
+    for c in reversed(codes):
+        u.keybd_event(c, 0, KEYUP, 0)
+        time.sleep(0.02)
+
+
+def windows(limit: int = 40) -> list[dict[str, Any]]:
+    """列出可见的顶层窗口。给「切到某个程序」和「游戏在前台吗」用。"""
+    ctypes, wintypes, u, _ = _win()
+    u.EnumWindows.restype = wintypes.BOOL
+    u.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+    u.IsWindowVisible.argtypes = [ctypes.c_void_p]
+    u.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.RECT)]
+
+    found: list[dict[str, Any]] = []
+
+    def cb(hwnd, _lparam):
+        if not u.IsWindowVisible(hwnd):
+            return True
+        n = u.GetWindowTextLengthW(hwnd)
+        if n <= 0:
+            return True
+        buf = ctypes.create_unicode_buffer(n + 1)
+        u.GetWindowTextW(hwnd, buf, n + 1)
+        title = buf.value.strip()
+        if not title:
+            return True
+        r = wintypes.RECT()
+        u.GetWindowRect(hwnd, ctypes.byref(r))
+        w, h = int(r.right - r.left), int(r.bottom - r.top)
+        if w < 80 or h < 60:
+            return True
+        found.append({"hwnd": int(hwnd), "title": title[:80], "w": w, "h": h,
+                      "x": int(r.left), "y": int(r.top)})
+        return True
+
+    u.EnumWindows(ctypes.WINFUNCTYPE(wintypes.BOOL, ctypes.c_void_p, ctypes.c_void_p)(cb), 0)
+    found.sort(key=lambda x: x["w"] * x["h"], reverse=True)
+    return found[:limit]
+
+
+def focus(want: str) -> dict[str, Any]:
+    """把匹配标题的窗口提到前台。返回被切过去的那个窗口。"""
+    ctypes, wintypes, u, _ = _win()
+
+    key_ = str(want or "").strip().lower()
+    if not key_:
+        raise DesktopError("没给窗口名")
+    cands = [w for w in windows(200) if key_ in w["title"].lower()]
+    if not cands:
+        raise DesktopError(f"没找到标题含「{want}」的窗口")
+    win = cands[0]
+    hwnd = ctypes.c_void_p(win["hwnd"])
+    u.ShowWindow(hwnd, 9)          # SW_RESTORE：最小化的也能提上来
+    time.sleep(0.1)
+    u.SetForegroundWindow(hwnd)
+    time.sleep(0.2)
+    return {"ok": True, "hwnd": win["hwnd"], "title": win["title"],
+            "foreground": foreground(), "matched": len(cands),
+            "others": [w["title"] for w in cands[1:4]]}
+
+
+def window_rect(want: str) -> dict[str, Any]:
+    """查某个窗口的位置与大小（游戏要按这个算坐标）。"""
+    key_ = str(want or "").strip().lower()
+    cands = [w for w in windows(200) if key_ and key_ in w["title"].lower()]
+    return cands[0] if cands else {}
+
 
 

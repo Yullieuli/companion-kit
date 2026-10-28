@@ -181,3 +181,49 @@ class McpTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class InputTest(unittest.TestCase):
+    """新的输入能力：滑动、按键、切窗口、游戏坐标换算。都只测不碰硬件的部分。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_map_point_scales(self):
+        self.assertEqual(device.map_point(960, 540, (1920, 1080), (1920, 1080)), (960, 540))
+        self.assertEqual(device.map_point(960, 540, (1920, 1080), (2560, 1440)), (1280, 720))
+        self.assertEqual(device.map_point(0, 0, (1920, 1080), (1280, 720)), (0, 0))
+
+    def test_map_point_survives_zero_size(self):
+        self.assertEqual(device.map_point(10, 10, (0, 0), (0, 0)), (10, 10))
+
+    def test_vk_names(self):
+        from companion import devwin
+
+        self.assertEqual(devwin._vk("enter"), 0x0D)
+        self.assertEqual(devwin._vk("A"), ord("A"))
+        self.assertEqual(devwin._vk("f5"), 0x74)
+        with self.assertRaises(devwin.DesktopError):
+            devwin._vk("这个键不存在")
+
+    def test_focus_respects_window_whitelist(self):
+        cfg = device.config(self.home)
+        cfg.setdefault("allow", {}).setdefault("desktop", {})["windows"] = ["记事本"]
+        self.home.save_json("devices.json", cfg)
+        out = device.focus_window_by(self.home, "Chrome")
+        self.assertFalse(out["ok"])
+        self.assertIn("白名单", out["error"])
+
+    def test_focus_needs_owner(self):
+        out = device.focus_window_by(self.home, "记事本", is_owner=False)
+        self.assertFalse(out["ok"])
+        self.assertIn("主人", out["error"])
+
+    def test_act_rejects_unknown_desktop_action(self):
+        out = device.act(self.home, "desktop", "format_disk", {"x": 1, "y": 1})
+        self.assertFalse(out["ok"])

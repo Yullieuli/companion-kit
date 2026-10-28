@@ -184,3 +184,48 @@ def browser_type(text: str) -> None:
     cdp_call("Input.insertText", {"text": text})
 
 
+def browser_swipe(x1: int, y1: int, x2: int, y2: int, steps: int = 8) -> None:
+    """拖动/滚屏。用 mouseMoved 的连续帧，页面才认得出是拖不是点。"""
+    cdp_call("Input.dispatchMouseEvent",
+             {"type": "mousePressed", "x": int(x1), "y": int(y1), "button": "left", "clickCount": 1})
+    for i in range(1, steps + 1):
+        cdp_call("Input.dispatchMouseEvent",
+                 {"type": "mouseMoved", "button": "left",
+                  "x": int(x1 + (x2 - x1) * i / steps), "y": int(y1 + (y2 - y1) * i / steps)})
+    cdp_call("Input.dispatchMouseEvent",
+             {"type": "mouseReleased", "x": int(x2), "y": int(y2), "button": "left", "clickCount": 1})
+
+
+# CDP 的键名跟 Windows 的 VK 不一样，这里把常用的两边对上
+CDP_KEY = {
+    "enter": ("Enter", 13), "tab": ("Tab", 9), "esc": ("Escape", 27), "escape": ("Escape", 27),
+    "space": (" ", 32), "backspace": ("Backspace", 8), "delete": ("Delete", 46),
+    "up": ("ArrowUp", 38), "down": ("ArrowDown", 40),
+    "left": ("ArrowLeft", 37), "right": ("ArrowRight", 39),
+    "home": ("Home", 36), "end": ("End", 35),
+}
+
+
+def browser_key(combo: str) -> None:
+    """按键或组合键：`enter` / `ctrl+a` / `PageDown`。"""
+    parts = [p for p in str(combo or "").replace(" ", "").split("+") if p]
+    if not parts:
+        raise BrowserError("没给键名")
+    main = parts[-1].lower()
+    if main in CDP_KEY:
+        name, code = CDP_KEY[main]
+    elif len(main) == 1:
+        name, code = main.upper(), ord(main.upper())
+    elif main.startswith("f") and main[1:].isdigit():
+        name, code = main.upper(), 0x70 + int(main[1:]) - 1
+    else:
+        raise BrowserError(f"不认识的键：{combo}")
+    mods = 0
+    for m in parts[:-1]:
+        mods |= {"alt": 1, "ctrl": 2, "control": 2, "meta": 4, "cmd": 4, "shift": 8}.get(m.lower(), 0)
+    base = {"key": name, "code": name, "windowsVirtualKeyCode": code,
+            "nativeVirtualKeyCode": code, "modifiers": mods}
+    cdp_call("Input.dispatchKeyEvent", {"type": "keyDown", **base})
+    cdp_call("Input.dispatchKeyEvent", {"type": "keyUp", **base})
+
+

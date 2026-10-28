@@ -98,8 +98,12 @@ companion memory index                  # 从各页 summary 重新投影索引
 companion life add "看完影之刃零" --kind watch --detail "10 分"
 companion person learn --who owner --fact "讨厌开放式结局"
 companion voice say "今天想跟你说句话"    # 本地 TTS，落盘不发送
-companion device look --target desktop   # 截图 + 前台窗口
+companion device look --target desktop   # 截图 + 前台窗口 + 可见窗口标题
 companion device act --target phone --act tap --x 540 --y 1200
+companion device act --target desktop --act swipe --x 600 --y 400 --x2 600 --y2 900
+companion device act --target desktop --act key --key ctrl+s
+companion device list                    # 可见窗口（按面积排）
+companion device focus --what 记事本      # 切到某个窗口（走窗口白名单）
 companion react --mood satisfaction=12 --why "他说想听我说说" \
                 --opinion "它敢砍经验值是为了逼玩家真学招式" --opinion-tags 游戏 \
                 --memory-title 影之刃零 --memory-summary "敢砍经验值" --said "挺公道"
