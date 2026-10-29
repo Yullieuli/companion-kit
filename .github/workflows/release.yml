@@ -79,13 +79,44 @@ jobs:
           # wheel 必须自带 hermes 适配层，否则 connect hermes 在 pip 安装下失效
           /tmp/rel-venv/bin/python -c "from companion.connect import _bundled_hermes_dir; assert _bundled_hermes_dir(), 'wheel 里没有 hermes 适配层'"
 
+      # Release 正文直接取 CHANGELOG 里本版那一段。
+      # 用 generate_release_notes 只能根据 PR / commit 自动拼，而这个项目不是
+      # 按 PR 合并的，生出来只有一行 Full Changelog —— 发出去等于没写。
+      - name: 从 CHANGELOG 生成本版说明
+        run: |
+          python - <<'PY'
+          import os, pathlib, re, subprocess
+          tag = os.environ["GITHUB_REF_NAME"]
+          ver = tag.lstrip("v")
+          repo = os.environ["GITHUB_REPOSITORY"]
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          m = re.search(rf"^## \[{re.escape(ver)}\].*?$(.*?)(?=^## \[|\Z)", text, re.M | re.S)
+          if not m:
+              raise SystemExit(f"CHANGELOG.md 里找不到 {ver} 的段落，拒绝发布空说明")
+          body = m.group(1).strip()
+          try:
+              prev = subprocess.check_output(
+                  ["git", "describe", "--tags", "--abbrev=0", "HEAD^"],
+                  text=True, stderr=subprocess.DEVNULL).strip()
+          except Exception:
+              prev = ""
+          if prev:
+              body += f"\n\n---\n\n**完整对比**：[{prev}...{tag}](https://github.com/{repo}/compare/{prev}...{tag})"
+          body += (
+              "\n\n**安装**：\n\n```bash\n"
+              f"curl -fsSL https://ghproxy.net/https://raw.githubusercontent.com/{repo}/main/install.sh | bash\n```\n"
+          )
+          pathlib.Path("release-notes.md").write_text(body, encoding="utf-8")
+          print(f"Release 说明 {len(body)} 字（对比基线 {prev or '无'}）")
+          PY
+
       - name: 发布
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
+          body_path: release-notes.md
           draft: false
-          generate_release_notes: true
           files: |
             dist/*.whl
             install.sh
