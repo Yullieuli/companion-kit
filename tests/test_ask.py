@@ -89,7 +89,7 @@ class DeviceAskTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.home = Home.at(self.tmp.name)
         self.home.init()
-        # v0.9.3 起设备控制默认关闭：这两个测试验证的是「ask 凭据流程」，
+        # 0.3.0 起设备控制默认关闭：这两个测试验证的是「ask 凭据流程」，
         # 需要显式启用并给桌面白名单放行 notepad。
         cfg = device.config(self.home)
         cfg["enabled"] = True

@@ -69,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/Yullieuli/companion-kit/main/instal
 > `bash install.sh --from /path/to/companion-kit`（Windows 用 `install.ps1 -From .`）。
 > 安装脚本的版本号与 `companion.__version__` 由测试守着，不会再出现"脚本装旧包"。
 >
-> ⚠️ **从 0.9.x 升级请先看 [docs/UPGRADE.md](docs/UPGRADE.md)**：设备控制默认改成关闭、
+> ⚠️ **从 0.2.x 升级请先看 [docs/UPGRADE.md](docs/UPGRADE.md)**：设备控制默认改成关闭、
 > 白名单空即拒绝、MCP 主人身份不再听模型的话——不配白名单的话她会对你的屏幕"失明"。
 
 调试用两个环境变量：

@@ -24,7 +24,7 @@ set -uo pipefail
 REPO="${COMPANION_REPO:-https://github.com/Yullieuli/companion-kit}"
 # 版本只有一个来源：发版时改这一行（或用 COMPANION_VERSION 覆盖）。
 # 以前这里和文件名各写一次，结果一个是 0.2.8、一个是 0.2.3，装上去的是半年前的包。
-VERSION="${COMPANION_VERSION:-0.9.2}"
+VERSION="${COMPANION_VERSION:-0.3.0}"
 WHEEL="${COMPANION_WHEEL:-$REPO/releases/download/v$VERSION/companion_kit-$VERSION-py3-none-any.whl}"
 HOME_DIR="${COMPANION_HOME:-$HOME/.companion}"
 PYTHON="${COMPANION_PYTHON:-}"

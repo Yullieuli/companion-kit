@@ -1,6 +1,6 @@
 # companion-kit 修改清单与后续计划
 
-> 暂停点：2026-10-28，基于本地 v0.9.2 工作区。
+> 暂停点：2026-10-28，基于本地 v0.3.0 工作区。
 > 本文记录本轮审计后的实际改动和剩余工作，不代表已经完成验收。
 > 当前修改均未提交、未发布；暂不可作为稳定版本交付。
 
@@ -464,7 +464,7 @@ lifecycle.invoke_hook("post_llm_call", ...)        # 真实分发
 - Windows / Python 3.13.12：348 项 `unittest` 全部通过。
 - WSL / Python 3：348 项 `unittest` 全部通过。
 - 上述结果主要证明 core、契约和 mock 测试可运行，不等于四个真实宿主或全平台验收通过。
-- 远程 `install.sh` 和 v0.9.2 wheel 当时仍为 404，本地 `main` 领先 `origin/main` 21 个提交。
+- 远程 `install.sh` 和 v0.3.0 wheel 当时仍为 404，本地 `main` 领先 `origin/main` 21 个提交。
 
 本轮修改后：
 

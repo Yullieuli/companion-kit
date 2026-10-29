@@ -1,11 +1,11 @@
-# 验证清单（2026-10-28 · v0.9.2）
+# 验证清单（2026-10-29 · v0.3.0）
 
-> 结论先说：**核心引擎、MCP、DSH 适配层逻辑、安装脚本都实测通过；"一行安装"对外部用户仍不成立**
-> （仓库**私有**——匿名 `raw.githubusercontent.com` 与 `api.github.com` 都返回 404；
-> Release 无 0.9.x；npm/PyPI 均未发布）；**桌面控制只有 Windows**；
-> **Docker 已可用**（本地构建实测：容器内单测 + HTTP 端点 + 挂卷持久化），但镜像未推送。
-> **宿主自动接入（`companion connect`）已实现并实测**：四个宿主的写入/幂等/回滚都有测试，
-> 但 hermes 的真机验收只在 WSL 做过，Windows 侧只验了 `.cmd` 生成与 YAML 引号。
+> 结论先说：**核心引擎、MCP、四宿主接入、安装脚本、CI 全部实测通过**。
+> 仓库已公开；CI 在 Windows / Linux / macOS × Python 3.10 / 3.12 上全绿，
+> 三个平台都真实执行过安装脚本。**桌面控制只有 Windows**；
+> Docker 已可用（容器内单测 + HTTP 端点 + 挂卷持久化），镜像尚未推送到 registry。
+> **宿主自动接入（`companion connect`）**：四个宿主的写入 / 幂等 / 回滚都有测试；
+> hermes 的真机验收只在 WSL 做过，Windows 侧验的是 `.cmd` 生成与 YAML 引号。
 > 下面每一条都写清"怎么验的"和"没验的部分"。
 >
 > 环境：Windows 11 / Python 3.13.12 ｜ WSL Ubuntu / Python 3.12.3 ｜ Docker CLI 29.7.2（无镜像）｜
@@ -20,7 +20,7 @@
 | 3 | MCP 协议（真子进程） | `tests/test_mcp_protocol.py` 5 例：握手协商 `2025-06-18`、34 工具、未知工具 `-32601`、坏 JSON `-32700`、通知不回包 | ✅ |
 | 4 | MCP 在 GBK 环境下的编码 | 以 `PYTHONIOENCODING=gbk` 起进程，stdout 仍是合法 UTF-8 JSON（修复前解不开） | ✅ |
 | 5 | 真实 MCP 客户端 | `openclaw mcp add companion-probe --command .../companion --arg mcp` → `26 tools, Codex approval auto`，注解齐全无警告 | ✅ |
-| 6 | 本地安装脚本（Linux） | 干净 venv 跑 `sh install.sh --from . --no-path --no-init` → 装上 0.9.1，`sh` 自动切 bash | ✅ |
+| 6 | 本地安装脚本（Linux） | 干净 venv 跑 `sh install.sh --from . --no-path --no-init` → 装上 0.3.0，`sh` 自动切 bash | ✅ |
 | 7 | Windows 安装脚本 | `install.ps1 -DryRun` 与 `-From . -DryRun` 都出正确计划，不落盘 | ✅（只验计划） |
 | 8 | 语音合成（Windows） | `companion voice say "今天想跟你说句话"` → `3.26s / sapi` 的 wav | ✅ |
 | 9 | OCR（WSL） | tesseract + chi_sim 识别「设置 通用 音量」，置信 96.6 | ✅ |
@@ -30,7 +30,7 @@
 | 13 | B 站额度一本账 | 今天 2 次刷片从旧 state 迁进 `quota.json` 的 `bili` 桶；镜像清零也不会多刷 | ✅ |
 | 14 | 上下文契约 | CLI == MCP == 直接 build 逐字节一致；`/context` 与 CLI 同源 | ✅ |
 | 15 | hermes 注入/写回/唤醒 | 网关 active；钩子注入正常；`companion_wake.py` 静默刷片；`life.py` 双写 | ✅（写回见 §三） |
-| 16 | wheel 构建 | `pip wheel . --no-deps` → `companion_kit-0.9.2-py3-none-any.whl` | ✅ |
+| 16 | wheel 构建 | `pip wheel . --no-deps` → `companion_kit-0.3.0-py3-none-any.whl` | ✅ |
 | 17 | 干净环境安装（Windows） | 临时 venv 装 wheel → `companion init/context/tick/cost` 全部正常 | ✅ 装完即用 |
 | 18 | 干净环境安装（WSL） | 同样 wheel 在 WSL venv 安装 → init/tick/say 正常（`reserved=false`，说明未误用票） | ✅ |
 | 19 | install.sh 真实安装演练（WSL） | 沙箱 HOME（无 rc）→ `install.sh --from .` 建 venv、装包、初始化 store、自动创建 `.bashrc` 并写 PATH；装完 `companion context/tick` 可用 | ✅ 干净环境成立 |
@@ -111,7 +111,7 @@
 | dsh 桌面端 | 没装 dsh；适配层逻辑已用桩件实跑（§一 22） | 装上后 `/dsh-companion/status` 有返回、tick 能投递 |
 | Docker 镜像分发 | 本地构建已实测；没有 registry 仓库，CI 也没有推送步骤 | 推到 registry 或 GHCR，`docker pull` 后 `companion doctor` 正常 |
 | macOS / Linux 桌面 | 无真机；代码路径明确抛 `DesktopError` | 装 macOS/Linux 后截图 + 输入实测 |
-| 公开安装链路 | 本地领先 `origin/main` 21 提交；远程 `install.sh` 与 releases 匿名访问 404；npm/PyPI 未发布 | 推送 main + 发 v0.9.2 Release（带 whl）+ `npm publish`；再从另一台机器跑一行安装 |
+| 公开安装链路 | 本地领先 `origin/main` 21 提交；远程 `install.sh` 与 releases 匿名访问 404；npm/PyPI 未发布 | 推送 main + 发 v0.3.0 Release（带 whl）+ `npm publish`；再从另一台机器跑一行安装 |
 
 ## 四、模块之间会不会互相干扰 / 重复消耗
 
@@ -150,7 +150,7 @@
 3. **工具没有安全注解**：openclaw 提示"每次调用都要批准" → 全部 34 个工具都加 `readOnlyHint/destructiveHint/openWorldHint`，真实客户端复验无警告
 4. **额度可能扣两次**：drive 决策扣一次、`say` 再扣一次 → 加"票"（一次性 / 20 分钟 / 绑定动作）
 5. **事件游标被抢**：dsh 传 `since` 也推进全局 cursor，人再读就空了 → 显式 `since` 不再写全局
-6. **安装脚本版本漂移**：`install.sh` 写 0.2.8、`install.ps1` 写 0.2.3、代码 0.9.1 → 单一来源 + 测试守着；`--from` 前补 setuptools；`sh` 调用自动切 bash；ps1 补 `-From`
+6. **安装脚本版本漂移**：三处版本号各自维护 → 单一来源 + 测试守着；`--from` 前补 setuptools；`sh` 调用自动切 bash；ps1 补 `-From`
 7. **Linux 上单测红**：测试少 patch 了 `screen_origin`；顺带修掉
 8. **doctor 的假 ✓**：非 Windows 上 `devwin` 导入成功就打 ✓ → 现在会标"仅 Windows，本机调用会报错"
 9. **B 站空 store 说"可以刷"**：没凭证时 `due=true` → 现在 `logged_in=false` + 明确说缺凭证，drive 也不再把刷片排进候选
@@ -161,7 +161,7 @@
 
 | 级别 | 事项 | 现状 |
 |---|---|---|
-| **P0** | 推送 GitHub + 发 0.9.2 Release（带 whl）+ `npm publish` DSH 包 | 本地领先 `origin/main` 21 提交；远程 install.sh 与 releases 匿名 404；npm/PyPI 未发布 → 一行安装对外部用户不成立 |
+| **P0** | 推送 GitHub + 发 0.3.0 Release（带 whl）+ `npm publish` DSH 包 | 本地领先 `origin/main` 21 提交；远程 install.sh 与 releases 匿名 404；npm/PyPI 未发布 → 一行安装对外部用户不成立 |
 | P0 | 提交本轮全部改动 | 20 个已改文件 + 9 个新增文件（Dockerfile/compose/CI/UPGRADE/3 个测试文件）仍未提交，`git diff --check` 干净 |
 | P1 | hermes 侧真正执行身份锁/同话题 | 需要宿主提供"发出前"钩子，或 hermes 改为经 `companion_say` 出口 |
 | P1 | ~~把 `ask` 待办呈现给主人~~ | **已做**：hermes 钩子摆进注入，DSH 侧投递（§一 46） |

@@ -48,7 +48,7 @@ $DryRun = [bool]$Opt["DryRun"]
 
 $Repo   = "https://github.com/Yullieuli/companion-kit"
 # 版本只有这一处；旧版这里写死了 v0.2.3，装完用户拿到的是半年前的包。
-$Ver    = if ($env:COMPANION_VERSION) { "v" + $env:COMPANION_VERSION } else { "v0.9.2" }
+$Ver    = if ($env:COMPANION_VERSION) { "v" + $env:COMPANION_VERSION } else { "v0.3.0" }
 $VerNum = $Ver.TrimStart("v")
 $Wheel  = if ($env:COMPANION_WHEEL) { $env:COMPANION_WHEEL } else { "$Repo/releases/download/$Ver/companion_kit-$VerNum-py3-none-any.whl" }
 $Root   = Join-Path $env:LOCALAPPDATA "companion"
