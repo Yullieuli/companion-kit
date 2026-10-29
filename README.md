@@ -39,14 +39,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 curl -fsSL https://raw.githubusercontent.com/Yullieuli/companion-kit/main/install.sh | bash
 ```
 
-> 国内访问 `raw.githubusercontent.com` 经常超时。把域名换成 jsDelivr 即可，脚本内容一致：
+> 国内访问 `raw.githubusercontent.com` 经常超时。套一层代理即可，脚本内容一致：
 >
 > ```bash
-> curl -fsSL https://cdn.jsdelivr.net/gh/Yullieuli/companion-kit@main/install.sh | bash
+> curl -fsSL https://ghproxy.net/https://raw.githubusercontent.com/Yullieuli/companion-kit/main/install.sh | bash
 > ```
 >
 > Windows 同理，把 `irm` 的地址换成
-> `https://cdn.jsdelivr.net/gh/Yullieuli/companion-kit@main/install.ps1`。
+> `https://ghproxy.net/https://raw.githubusercontent.com/Yullieuli/companion-kit/main/install.ps1`。
+>
+> jsDelivr 也能用（`cdn.jsdelivr.net/gh/Yullieuli/companion-kit@main/install.sh`），
+> 但它对 `@main` 有缓存，可能滞后几小时——要拿最新版就走上面的 ghproxy。
 > 脚本内部下载 wheel 时也会在 GitHub 直连失败后自动换镜像重试。
 
 这一行会**自己做完所有事**，中间不需要你点任何东西：
