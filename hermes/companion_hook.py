@@ -147,10 +147,12 @@ def _said_state(home) -> list[str]:
 
 
 def _record_turn(home, said: str, ctx: dict, turn: str, platform: str) -> bool:
-    """把她说的话写回 companion（零 token：一次本地子进程，不调模型）。
+    """【已停用】pre 钩子里的写回兜底。
 
-    为什么放在 pre_llm_call：hermes 没有 post_response 钩子，但这里能拿到完整历史，
-    所以"上一句"是确定的。用 (turn_id + 正文) 的哈希去重，工具循环里不会记多遍。
+    2026-10-29 起写回统一走 post_llm_call（companion_post.py）。
+    这个函数的去重 key 是 (turn_id + 正文)，而它拿到的是「上一轮正文 + 本轮 turn_id」，
+    与 post 的「本轮正文 + 本轮 turn_id」永远撞不上——只要调用就必然重复记录。
+    保留函数体只为不破坏可能的外部引用，正常流程不再调用。
     """
     import hashlib
     import json as _json
@@ -304,20 +306,18 @@ def main() -> int:
         print(json.dumps({"warn": f"上下文构建失败：{e}"}, ensure_ascii=False))
         return 0
 
-    # 先把她上一句写回去（读侧是注入，写侧是这里），再注入
-    try:
-        said = _last_assistant(payload.get("conversation_history"))
-        recorded = _record_turn(home, said, ctx.as_dict(),
-                                str(payload.get("turn_id") or ""), platform)
-        if recorded:
-            # 心情只在她真的开口之后才动：否则每次 LLM 调用都推一次，等于按调用次数计心情
-            from companion import mood_rules
-
-            r = mood_rules.on_turn(home, gap_hours=gap_hours)
-            if r.get("applied"):
-                _note(f"mood {r['applied']} -> {r.get('label')}")
-    except Exception as e:
-        _note(f"record-skip {type(e).__name__}: {e}")
+    # 写回不在这里做了。
+    #
+    # 这里曾经有一段"pre 兜底"：从 conversation_history 取最后一条 assistant 写回，
+    # 理由是"hermes 没有 post_response 钩子"。后来 post_llm_call 钩子（companion_post.py）
+    # 补上了，而且完整覆盖（react 一条命令落心情 / 人物卡 / 记忆 / 成本）。
+    #
+    # 但那段兜底没删，结果是每轮 assistant 记录写两遍：pre 用的是
+    # (本轮 turn_id + 上一轮正文)，post 用的是 (本轮 turn_id + 本轮正文)，
+    # 两个哈希永远撞不上，去重形同虚设；连 mood_rules.on_turn 也跟着多推一次。
+    # 2026-10-29 实测：turns.jsonl 里两类记录 7:7 完全对半。
+    #
+    # 现在写回只有一条路：post_llm_call → companion_post.py。
 
     # 把"你刚说过什么"摆到她面前：靠提示词管不住重复，但给事实比给规则有用
     try:

@@ -33,6 +33,7 @@ from pathlib import Path
 from . import connect as connect_mod
 from . import context as context_mod
 from . import device, devdelegate
+from . import __version__
 from . import (cost, distill, drive, events, fence, group, life, memory,
                mood as mood_mod, mood_rules, opinion, people,
                react as react_mod, resume as resume_mod, sticker, watchdog)
@@ -905,6 +906,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="companion", description="跨 agent 的伴侣运行时")
     p.add_argument("--home", help="store 目录（默认 $COMPANION_HOME 或 ~/.companion）")
     p.add_argument("--json", action="store_true", help="机器可读输出")
+    # 标准 CLI 习惯用法；action="version" 在解析到该参数时立即打印并退出，
+    # 不需要 cmd，也不会被下面的 required=True 拦住。
+    p.add_argument("--version", action="version", version=f"companion {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("init", help="初始化 store")

@@ -140,6 +140,23 @@ def _remember(home: Path, digest: str) -> None:
         pass
 
 
+def _est_tokens(text: str) -> int:
+    """按字符构成估 token。
+
+    hermes 的 ``post_llm_call`` payload 里没有用量字段（只有 assistant_response /
+    conversation_history / model），所以只能估。中英文的 token 密度差四倍，
+    统一按字符数除会系统性偏差，这里分开算：
+
+      · 汉字：约 1 字 1 token
+      · 其它（英文/数字/标点）：约 4 字符 1 token
+
+    这是估算，不是真实计费；``companion cost`` 的数字口径以此为准。
+    """
+    text = text or ""
+    cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+    return cjk + (len(text) - cjk) // 4
+
+
 def _react(home: Path, payload: dict) -> tuple[bool, str]:
     """调 core 的 react 落账。返回 (成功, 原因)。"""
     try:
@@ -196,12 +213,27 @@ def main() -> int:
         print("{}")
         return 0
 
+    # hermes 不给用量，按字符估：历史算 cached（单价低），本轮用户消息与回复算 fresh/output。
+    history_text = ""
+    raw_history = payload.get("conversation_history")
+    if isinstance(raw_history, list):
+        for m in raw_history:
+            if isinstance(m, dict):
+                history_text += _text_of(m.get("content")) or ""
+    user_text = _text_of(payload.get("user_message"))
+
     # 她说了什么 + 她刚跟主人说过话（人物卡 last_seen）
     body = {
         "said": said[:1500],
         "why": "hermes post_llm_call 记录",
         "person": "owner",
         "facts": [],
+        "usage": {
+            "model": str(payload.get("model") or ""),
+            "fresh_tokens": _est_tokens(user_text),
+            "cached_tokens": _est_tokens(history_text),
+            "output_tokens": _est_tokens(said),
+        },
     }
     ok, why = _react(home, body)
     if not ok:
