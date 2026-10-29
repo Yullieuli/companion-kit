@@ -1,0 +1,17 @@
+.git
+.github
+.gitignore
+.gitattributes
+build
+dist
+node_modules
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.venv
+venv
+data
+*.tmp
+.DS_Store
+docs

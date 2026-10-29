@@ -14,6 +14,8 @@
 #   -Store <dir>     对方 store 目录        COMPANION_HOME
 #   -Python <path>   指定解释器             COMPANION_PYTHON
 #   -NoDsh           不自动注册 DSH         COMPANION_NO_DSH=1
+#   -NoConnect       不自动接宿主（hermes/dsh/openclaw/codex）
+#   -DryConnect      只打印会怎么接，不写宿主配置
 #   -NoEnv           不改 PATH/环境变量      COMPANION_NO_ENV=1
 #   -From <dir>      从本地目录装（开发/未发布时用）  COMPANION_FROM
 #   -DryRun          只打印，不改任何东西
@@ -39,6 +41,8 @@ $Store  = if ($Opt["Store"])  { $Opt["Store"] }  elseif ($env:COMPANION_HOME) { 
 $Python = if ($Opt["Python"]) { $Opt["Python"] } elseif ($env:COMPANION_PYTHON) { $env:COMPANION_PYTHON } else { "" }
 $From   = if ($Opt["From"]) { $Opt["From"] } elseif ($env:COMPANION_FROM) { $env:COMPANION_FROM } else { "" }
 $NoDsh  = [bool]($Opt["NoDsh"] -or ($env:COMPANION_NO_DSH -eq "1"))
+$NoConnect = [bool]($Opt["NoConnect"] -or ($env:COMPANION_NO_CONNECT -eq "1"))
+$DryConnect = [bool]$Opt["DryConnect"]
 $NoEnv  = [bool]($Opt["NoEnv"] -or ($env:COMPANION_NO_ENV -eq "1"))
 $DryRun = [bool]$Opt["DryRun"]
 
@@ -155,10 +159,22 @@ if ($From) {
 } elseif ($DryRun) {
   Say "[dry] pip install $Wheel"
 } else {
-  if (-not (Pip-Install @($Wheel))) {
-    Say "whl 装失败，回退 git（需要 git）"
+  # GitHub Release 的附件在国内经常拉不动（超时，不是 404）。
+  # 依次试直连与两个常用镜像；都失败才回退 git。
+  $installed = Pip-Install @($Wheel)
+  if (-not $installed) {
+    foreach ($mirror in @("https://ghproxy.net/$Wheel", "https://gh-proxy.com/$Wheel")) {
+      if (Pip-Install @($mirror)) {
+        $installed = $true
+        Say "直连不通，用镜像装上了"
+        break
+      }
+    }
+  }
+  if (-not $installed) {
+    Say "whl 与镜像都不通，回退 git（需要 git）"
     if (-not (Pip-Install @("git+$Repo"))) {
-      throw ("安装失败：whl 与 git 都不通。`n" +
+      throw ("安装失败：whl、镜像与 git 都不通。`n" +
              "  若是代理问题：先关掉系统代理/环境变量里的 HTTP(S)_PROXY 再重跑；`n" +
              "  若是网络问题：挂代理后重跑，或先装 Python 3.10+ 再重试。")
     }
@@ -169,6 +185,7 @@ if ($From) {
 $env:COMPANION_HOME = $Store
 if (-not $DryRun) {
   & (Join-Path $Venv "Scripts\companion.exe") init | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "初始化 store 失败" }
   Say "store 已初始化：$Store"
 }
 
@@ -191,8 +208,22 @@ if ($NoEnv) {
   $env:Path = "$scripts;$env:Path"
 }
 
-# ── 6. 顺手注册 DSH ────────────────────────────────────────
-if (-not $NoDsh) {
+# ── 6. 接宿主（默认全自动）─────────────────────────────────
+# 这是"一行安装"的另一半：装完 core 之后自动探测本机有哪些宿主并接上。
+# 失败不让整个安装失败——core 是好的，宿主没接上可以稍后重跑。
+if (-not $NoConnect) {
+  Say ""
+  Say "接宿主（探测到几个接几个）"
+  $companionExe = Join-Path $Venv "Scripts\companion.exe"
+  if ($DryRun -or $DryConnect) {
+    & $companionExe connect --dry-run
+  } else {
+    & $companionExe connect
+    if ($LASTEXITCODE -ne 0) {
+      Say "有宿主没接上。不影响 core，修好后单独重试：companion connect"
+    }
+  }
+} elseif (-not $NoDsh) {
   $dsh = Get-Command dsh -ErrorAction SilentlyContinue
   if ($dsh) {
     if ($DryRun) {
@@ -217,5 +248,10 @@ Write-Host "装好了。新开一个终端，然后试：" -ForegroundColor Gree
 Say "companion context --budget 1200"
 Say "companion tick"
 Say "companion cost"
+Write-Host ""
+Write-Host "宿主已经自动接过了（上面带 ✓ 的几行）。要复查或补接：" -ForegroundColor DarkGray
+Say "companion connect            # 再探测一次"
+Say "companion connect --status   # 只看装了什么"
+Say "companion connect --rollback # 撤回接入"
 Write-Host ""
 Write-Host "先改人格：$Store\SOUL.md" -ForegroundColor DarkGray

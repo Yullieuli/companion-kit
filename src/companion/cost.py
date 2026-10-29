@@ -144,10 +144,28 @@ def record_turn(
     fresh_tokens: int = 0,
     cached_tokens: int = 0,
     output_tokens: int = 0,
+    turn_id: str = "",
     session: str = "",
     note: str = "",
     prices: dict[str, dict[str, float]] | None = None,
 ) -> dict[str, Any]:
+    token_counts = {
+        "fresh_tokens": int(fresh_tokens),
+        "cached_tokens": int(cached_tokens),
+        "output_tokens": int(output_tokens),
+    }
+    for name, value in token_counts.items():
+        if value < 0:
+            raise ValueError(f"{name} 不能为负数")
+    fresh_tokens = token_counts["fresh_tokens"]
+    cached_tokens = token_counts["cached_tokens"]
+    output_tokens = token_counts["output_tokens"]
+
+    if turn_id:
+        for existing in load_rows(home):
+            if existing.get("turn_id") == turn_id:
+                return {**existing, "duplicate": True}
+
     now = now or datetime.now()
     c = cost_cny(fresh_tokens, cached_tokens, output_tokens, model, prices)
     row = {
@@ -155,14 +173,16 @@ def record_turn(
         "day": now.date().isoformat(),
         "session": session,
         "model": model,
-        "fresh": int(fresh_tokens),
-        "cached": int(cached_tokens),
-        "out": int(output_tokens),
+        "fresh": fresh_tokens,
+        "cached": cached_tokens,
+        "out": output_tokens,
         "cost": c,
         "note": note[:80],
     }
+    if turn_id:
+        row["turn_id"] = turn_id
     home.append_jsonl("logs/cost.jsonl", row)
-    return row
+    return {**row, "duplicate": False}
 
 
 def today_total(home, now: datetime | None = None) -> float:

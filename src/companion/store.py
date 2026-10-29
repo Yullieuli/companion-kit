@@ -9,9 +9,19 @@
 from __future__ import annotations
 
 import json
+import os
+import re
+import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+_THREAD_LOCKS: dict[tuple[str, str], threading.RLock] = {}
+_THREAD_LOCKS_GUARD = threading.Lock()
+_LOCK_STATE = threading.local()
 
 SOUL_TEMPLATE = """# 我是谁
 
@@ -151,13 +161,125 @@ class Home:
             return json.loads(json.dumps(default))  # 深拷贝，别让调用方改到常量
 
     # ── 写 ────────────────────────────────────────────────────
+    @contextmanager
+    def lock(self, name: str = "store", timeout: float = 30.0):
+        """跨线程/跨进程互斥，且允许同一进程内重入。
+
+        宿主各自起进程，单靠原子 replace 仍会丢「读—改—写」更新。锁文件只用于
+        同步，不存业务数据；Windows 用 msvcrt，POSIX 用 flock，无第三方依赖。
+        """
+        safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", name)[:80] or "store"
+        key = (str(self.root.expanduser().resolve()), safe)
+        with _THREAD_LOCKS_GUARD:
+            lock = _THREAD_LOCKS.setdefault(key, threading.RLock())
+        lock.acquire()
+        held = getattr(_LOCK_STATE, "held", None)
+        if held is None:
+            held = {}
+            _LOCK_STATE.held = held
+        # held[key] 形如 (depth, fh)：depth 是本线程的重入层数
+        depth = held.get(key, (0, None))[0]
+        fh = None
+        acquired = False
+        try:
+            if depth == 0:
+                path = self.root / "logs" / ".locks" / f"{safe}.lock"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                # Windows 上：别的进程正持有这个文件的排他锁时，
+                # 连 open 都会 PermissionError（不是等到 locking 才失败）。
+                # 所以这里要重试打开，而不是让第二个进程直接崩。
+                deadline = time.monotonic() + timeout
+                while True:
+                    try:
+                        fh = path.open("a+b")
+                        break
+                    except PermissionError:
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError(f"等待 store 锁超时：{safe}")
+                        time.sleep(0.05)
+                if os.name == "nt":
+                    import msvcrt
+
+                    if path.stat().st_size == 0:
+                        fh.write(b"\0")
+                        fh.flush()
+                    deadline = time.monotonic() + timeout
+                    while True:
+                        try:
+                            fh.seek(0)
+                            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                            break
+                        except OSError:
+                            if time.monotonic() >= deadline:
+                                raise TimeoutError(f"等待 store 锁超时：{safe}")
+                            time.sleep(0.05)
+                else:
+                    import fcntl
+
+                    deadline = time.monotonic() + timeout
+                    while True:
+                        try:
+                            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            break
+                        except OSError:
+                            if time.monotonic() >= deadline:
+                                raise TimeoutError(f"等待 store 锁超时：{safe}")
+                            time.sleep(0.05)
+                acquired = True
+                held[key] = (1, fh)
+            else:
+                held[key] = (depth + 1, held[key][1])
+            yield
+        finally:
+            try:
+                if depth == 0:
+                    if acquired and fh is not None:
+                        if os.name == "nt":
+                            import msvcrt
+
+                            fh.seek(0)
+                            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                        else:
+                            import fcntl
+
+                            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                    if fh is not None:
+                        fh.close()
+                    if acquired:
+                        held.pop(key, None)
+                elif key in held:
+                    held[key] = (depth, held[key][1])
+            finally:
+                lock.release()
+
     def save_json(self, rel: str, data: dict[str, Any]) -> Path:
         p = self.root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(p)
+        # 每个写者用不同临时文件，避免两个进程互删同一个 .tmp。
+        tmp = p.with_name(f".{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        try:
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(p)
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
         return p
+
+    def read_json(self, rel: str, default: Any = None) -> Any:
+        """读一个 json。文件不存在或坏了 → 返回 default（不抛）。
+
+        坏格式回落而不是抛：store 是"她生活过的地方"，
+        某个文件被手滑改坏不该让她整个启动不了。
+        """
+        p = self.root / rel
+        if not p.exists():
+            return default
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return default
 
     def append_jsonl(self, rel: str, row: dict[str, Any]) -> None:
         p = self.root / rel
@@ -179,3 +301,23 @@ class Home:
             except Exception:
                 continue
         return out[-limit:]
+
+    def save_jsonl(self, rel: str, rows: list[dict[str, Any]]) -> None:
+        """整份重写一个 jsonl（原子替换）。
+
+        append-only 的账本用这个不合适——那是账，丢了就真丢了。
+        但"待写回清单"这种**状态表**需要能改状态，用它才合适。
+        """
+        p = self.root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        body = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+        tmp = p.with_name(f".{p.name}.{os.getpid()}.{threading.get_ident():x}.tmp")
+        try:
+            tmp.write_text(body, encoding="utf-8")
+            os.replace(tmp, p)
+        except Exception:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise

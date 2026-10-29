@@ -25,13 +25,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
 
+from . import connect as connect_mod
 from . import context as context_mod
 from . import device, devdelegate
-from . import cost, drive, events, fence, group, life, memory, mood as mood_mod, mood_rules, opinion, people, react as react_mod, sticker
+from . import (cost, distill, drive, events, fence, group, life, memory,
+               mood as mood_mod, mood_rules, opinion, people,
+               react as react_mod, resume as resume_mod, sticker, watchdog)
 from .store import Home
 
 
@@ -42,13 +46,64 @@ def _dump(obj, as_json: bool) -> None:
         print(obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False, indent=2))
 
 
+def cmd_webpage(home: Home, args) -> int:
+    """把网页变成能进上下文的一段话：抽正文 → 摘要 → 挑页 → 缓存。"""
+    from . import webpage
+
+    if args.action == "extract":
+        html = args.html
+        if args.file:
+            try:
+                html = Path(args.file).read_text(encoding="utf-8", errors="replace")
+            except OSError as e:
+                _dump({"ok": False, "error": str(e)}, args.json)
+                return 1
+        out = {"ok": True, "text": webpage.extract_text(html),
+               "chars": len(webpage.extract_text(html))}
+    elif args.action == "read":
+        html = args.html
+        if args.file:
+            try:
+                html = Path(args.file).read_text(encoding="utf-8", errors="replace")
+            except OSError as e:
+                _dump({"ok": False, "error": str(e)}, args.json)
+                return 1
+        out = webpage.read_page(home, args.url, html, ttl=args.ttl,
+                               max_chars=args.max_chars, focus=args.focus)
+    elif args.action == "pick":
+        pages = []
+        if args.pages:
+            try:
+                pages = json.loads(args.pages)
+            except json.JSONDecodeError as e:
+                _dump({"ok": False, "error": f"--pages 不是合法 JSON：{e}"}, args.json)
+                return 1
+        out = {"ok": True, "pages": webpage.pick_pages(pages, args.query, top=3),
+               "query": args.query}
+    else:
+        out = {"ok": True, **webpage.stats(home)}
+    _dump(out if args.json else json.dumps(out, ensure_ascii=False, indent=2), args.json)
+    return 0 if out.get("ok", True) else 1
+
+
 def cmd_init(home: Home, args) -> int:
     created = home.init()
+    # 顺手播种内置表情：空库起步的话她一张表情都发不出去。
+    # 失败不影响 init —— 表情库是锦上添花，不是地基。
+    seeded = {}
+    try:
+        from . import stickerlib
+
+        seeded = stickerlib.seed_builtin(home)
+    except Exception as e:
+        seeded = {"error": f"{type(e).__name__}: {e}"}
     if args.json:
-        _dump({"home": str(home.root), "created": created}, True)
+        _dump({"home": str(home.root), "created": created, "stickers": seeded}, True)
     else:
         print(f"store: {home.root}")
         print("新建：" + ("、".join(created) if created else "（已存在，没有覆盖任何文件）"))
+        if isinstance(seeded, dict) and not seeded.get("error"):
+            print(f"内置表情：{len(seeded.get('written') or [])} 张")
     return 0
 
 
@@ -60,10 +115,25 @@ def cmd_context(home: Home, args) -> int:
         query=args.query or "",
         include_soul=not args.no_soul,
     )
+    session = str(getattr(args, "session", "") or "").strip()
+    if not session:
+        if args.json:
+            _dump(ctx.as_dict(), True)
+        else:
+            print(ctx.text)
+        return 0
+    # 带 session：增量投影。状态没变 → 空输出，这一轮不用注入。
+    proj = context_mod.project(home, session, ctx,
+                               force=bool(getattr(args, "full", False)))
     if args.json:
-        _dump(ctx.as_dict(), True)
+        out = ctx.as_dict()
+        out.update({"text": proj.text, "total_chars": len(proj.text),
+                    "full": proj.full, "changed": proj.changed, "dropped": proj.dropped,
+                    "rounds": proj.rounds, "reason": proj.reason, "session_id": session})
+        _dump(out, True)
     else:
-        print(ctx.text)
+        if proj.text:
+            print(proj.text)
     return 0
 
 
@@ -232,8 +302,16 @@ def _parse_when(raw: str | None) -> datetime | None:
 
 def cmd_person(home: Home, args) -> int:
     if args.action == "learn":
-        p = people.learn(home, args.who or people.OWNER, args.fact)
-        _dump(p.as_dict() if args.json else f"记住了关于 {p.name or p.key} 的一件事：{args.fact}", args.json)
+        # --fact 可重复，所以拿到的是列表；people.learn 一次收一条。
+        facts = list(getattr(args, "fact", None) or [])
+        if not facts:
+            _dump({"ok": False, "error": "要学什么？用 --fact \"...\""}, args.json)
+            return 1
+        p = None
+        for one in facts:
+            p = people.learn(home, args.who or people.OWNER, one)
+        assert p is not None
+        _dump(p.as_dict() if args.json else f"记住了关于 {p.name or p.key} 的 {len(facts)} 件事", args.json)
     elif args.action == "pending":
         out = {"ok": True, "pending": people.pending_distill(home)}
         _dump(out if args.json else (json.dumps(out["pending"], ensure_ascii=False, indent=2)
@@ -293,6 +371,8 @@ def cmd_react(home: Home, args) -> int:
             {"title": args.life, "kind": args.life_kind, "detail": args.life_detail or ""} if args.life else None),
         said=args.said or payload.get("said", ""),
         context=payload.get("context") or None,
+        usage=payload.get("usage") or (json.loads(args.usage) if args.usage else None),
+        turn_id=args.turn_id or payload.get("turn_id", ""),
     )
     _dump(out if args.json else json.dumps(out, ensure_ascii=False, indent=2), args.json)
     return 0
@@ -380,6 +460,27 @@ def cmd_sticker(home: Home, args) -> int:
     if args.action == "add":
         out = sticker.add(home, args.path, mood=args.mood, tags=args.tags or [])
         _dump(out if args.json else f"收进表情库：{out['name']}（{out['mood']}）", args.json)
+    elif args.action == "seed":
+        # 播种内置表情。空库起步的话她一张都发不出去。
+        from . import stickerlib
+
+        out = stickerlib.seed_builtin(home, force=bool(getattr(args, "force", False)))
+        _dump(out if args.json else
+              f"内置表情：写了 {len(out['written'])} 张，跳过 {len(out['skipped'])} 张",
+              args.json)
+    elif args.action == "extract":
+        # 自动提取：单张或整目录，自动认情绪
+        from . import stickerlib
+
+        if not args.path:
+            _dump({"ok": False, "error": "要给一个文件或目录"}, args.json)
+            return 1
+        p = Path(args.path)
+        if p.is_dir():
+            out = stickerlib.extract_dir(home, p, limit=int(getattr(args, "limit", 50) or 50))
+        else:
+            out = stickerlib.extract(home, p, mood=args.mood, tags=args.tags or [])
+        _dump(out if args.json else json.dumps(out, ensure_ascii=False, indent=2), args.json)
     elif args.action == "pick":
         hit = sticker.pick(home, args.mood, args.tags or [])
         if not hit:
@@ -485,7 +586,7 @@ def cmd_bili(home: Home, args) -> int:
 
 
 def cmd_ask(home: Home, args) -> int:
-    """她要动手之前先问的那一声：看列表 / 答应 / 拒绝。"""
+    """她要动手之前先问的那一声：看列表 / 答应 / 拒绝 / 按主人原话回填。"""
     from . import ask
 
     if args.action == "list":
@@ -494,6 +595,10 @@ def cmd_ask(home: Home, args) -> int:
         out = ask.decide(home, args.id, True)
     elif args.action == "deny":
         out = ask.decide(home, args.id, False)
+    elif args.action == "reply":
+        # 主人在对话里说了话，让它落到待办上。
+        # by="owner"：这是主人在场说的话，能开设备。
+        out = ask.decide_by_reply(home, args.text)
     else:  # pragma: no cover
         out = {"ok": False, "why": f"不认识的动作 {args.action}"}
     _dump(out if args.json else json.dumps(out, ensure_ascii=False, indent=2), args.json)
@@ -504,6 +609,190 @@ def cmd_serve(home: Home, args) -> int:
     from . import serve as serve_mod
 
     return serve_mod.serve(home, host=args.host, port=args.port)
+
+
+# ── 断点续传 / 记忆提炼 / 心跳 ───────────────────────────────
+def cmd_resume(home: Home, args) -> int:
+    """断点续传：找出说了但没写回的轮次。"""
+    if args.action == "settle":
+        ok = resume_mod.settle(home, args.turn_id or "")
+        _dump({"ok": ok, "turn_id": args.turn_id}, args.json)
+        return 0 if ok else 1
+    rows = resume_mod.pending(home)
+    if args.json:
+        _dump({"ok": True, "pending": len(rows), "turns": rows}, True)
+    else:
+        if not rows:
+            print("（没有待写回的轮次。）")
+        else:
+            for r in rows:
+                print(f"{r.get('turn_id')}  {r.get('at')}  {str(r.get('text'))[:40]}")
+    return 0
+
+
+def cmd_distill(home: Home, args) -> int:
+    """记忆自动提炼：挖模式 → 给人看 → 认可后落盘。"""
+    if args.action == "candidates":
+        cands = distill.candidates(home)
+        if args.json:
+            _dump({"ok": True, "candidates": cands}, True)
+        else:
+            if not cands:
+                print("（没有发现值得记住的模式。）")
+            for c in cands:
+                print(f"- {c['summary']}（{c['count']} 次）")
+        return 0
+    if args.action == "accept":
+        if not args.summary:
+            _dump({"ok": False, "error": "要 summary（一句话说清这条记忆）"}, args.json)
+            return 1
+        try:
+            page = distill.accept(home, args.summary, title=args.title or "",
+                                  body=args.body or "", tags=args.tags or None)
+        except Exception as e:
+            _dump({"ok": False, "error": f"{type(e).__name__}: {e}"}, args.json)
+            return 1
+        _dump(page if args.json else f"记住了：{page['summary']}", args.json)
+        return 0
+    text = distill.review(home)
+    _dump(text if args.json else text, args.json)
+    return 0
+
+
+def cmd_heartbeat(home: Home, args) -> int:
+    """心跳：宿主每次醒来写一次。看门狗据此判断她是不是还活着。"""
+    row = watchdog.beat(home, host=args.host or "cli")
+    # 同时往多宿主表里追加一条，方便看门狗分清"谁卡住了"
+    home.append_jsonl("logs/heartbeats.jsonl", row)
+    if args.json:
+        _dump({"ok": True, **row}, True)
+    else:
+        print(f"心跳已记录：{row['host']} pid={row['pid']} at={row['at']}")
+    return 0
+
+
+def _host_hook_report() -> list[dict[str, Any]]:
+    """宿主 shell 钩子有没有真的被批准。
+
+    hermes 这类宿主对 shell 钩子有 consent：config.yaml 里写了不算，
+    每个 (事件, 命令) 对还得在 allowlist 里被批准过。没批准就**静默不跑** ——
+    不报错、不进日志、钩子就是不执行。这种坑必须能在体检里查出来。
+    """
+    from . import hosthooks
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for env_name, default in (("HERMES_HOME", "~/.hermes"),):
+        home = Path(os.environ.get(env_name, default)).expanduser()
+        key = str(home)
+        if key in seen or not home.exists():
+            continue
+        seen.add(key)
+        try:
+            r = hosthooks.check(home)
+        except Exception as e:                       # 体检不该因为宿主目录怪就崩
+            out.append({"host": home.name, "ok": False, "detail": f"{type(e).__name__}: {e}",
+                        "missing": []})
+            continue
+        out.append({"host": home.name, "ok": r["ok"], "total": r["total"],
+                    "missing": [{"event": e, "command": c} for e, c in r["missing"]],
+                    "detail": "" if r["ok"] else "配了但没批准 —— 这些钩子不会执行",
+                    "allowlist": r["allowlist"]})
+    return out
+
+
+def cmd_connect(home: Home, args) -> int:
+    """把 companion 接到本机已装的宿主上。
+
+    这是"一行安装"的另一半：装完 core 之后，用户不該再手抄四份配置。
+    """
+    as_json = bool(getattr(args, "as_json", False) or args.json)
+
+    if args.rollback:
+        done = connect_mod.rollback(home, args.hosts or None)
+        if as_json:
+            print(json.dumps({"ok": True, "rolled_back": done}, ensure_ascii=False, indent=2))
+        else:
+            if not done:
+                print("没有可回滚的记录（先跑一次 companion connect）")
+            for line in done:
+                print("  " + line)
+        return 0
+
+    if not home.root.is_dir():
+        msg = f"store 还没初始化：{home.root}。先跑 companion init"
+        if as_json:
+            print(json.dumps({"ok": False, "error": msg}, ensure_ascii=False))
+        else:
+            print(msg, file=sys.stderr)
+        return 2
+
+    opts = {
+        "hermes_home": args.hermes_home,
+        "dsh_home": args.dsh_home,
+        "openclaw_home": args.openclaw_home,
+        "codex_home": args.codex_home,
+        "dsh_spec": args.dsh_spec,
+    }
+    try:
+        results = connect_mod.run(
+            home,
+            args.hosts or None,
+            dry_run=args.dry_run,
+            status_only=args.status,
+            force=args.force,
+            opts=opts,
+        )
+    except connect_mod.ConnectError as e:
+        if as_json:
+            print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+        else:
+            print(f"出错：{e}", file=sys.stderr)
+        return 1
+
+    if as_json:
+        print(json.dumps(
+            {
+                "ok": not any(r.status == "failed" for r in results),
+                "dry_run": bool(args.dry_run),
+                "results": [
+                    {"host": r.host, "status": r.status, "detail": r.detail,
+                     "files": r.files, "warnings": r.warnings}
+                    for r in results
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ))
+        return 1 if any(r.status == "failed" for r in results) else 0
+
+    marks = {
+        "connected": "✓",
+        "latest": "=",
+        "detected": "·",
+        "skipped": "·",
+        "planned": "?",
+        "failed": "✗",
+    }
+    print(f"store: {home.root}")
+    for r in results:
+        mark = marks.get(r.status, "?")
+        print(f"  {mark} {r.host:<9} {r.detail}")
+        for w in r.warnings:
+            print(f"    {' ' * 9} ⚠ {w}")
+    if args.dry_run:
+        print("\n（dry-run：没有改任何文件）")
+    failed = [r for r in results if r.status == "failed"]
+    if failed:
+        print("\n有宿主没接上。修掉上面的问题后单独重试，例如：")
+        print(f"  companion connect {failed[0].host}")
+        return 1
+    if not any(r.status in ("connected", "latest", "planned", "detected") for r in results):
+        print("\n没探测到可接的宿主。装好宿主后重跑：companion connect")
+        return 0
+    if any(r.host == "hermes" and r.status == "connected" for r in results):
+        print("\nhermes 接完要重启网关才生效：hermes gateway restart")
+    return 0
 
 
 def cmd_doctor(home: Home, args) -> int:
@@ -558,6 +847,7 @@ def cmd_doctor(home: Home, args) -> int:
         "limited": [c["item"] for c in checks if c.get("note")],
         "external": tools,
         "pyc_count": len(pyc),
+        "host_hooks": _host_hook_report(),
         "av_hint": {
             "why": "device 相关模块会调用 ctypes / 裸 socket / subprocess，杀软容易按「加载器」特征误报",
             "what_was_flagged": "companion/device.pyc 曾被判为 Trojan/Python.ShellLoader（误报）",
@@ -585,6 +875,14 @@ def cmd_doctor(home: Home, args) -> int:
     print()
     for k, v in tools.items():
         print(f"  {'✓' if v else '·'} {k:10} {v or '（没装，相关功能会自己降级）'}")
+    print()
+    for h in payload["host_hooks"]:
+        mark = "✓" if h["ok"] else "✗"
+        print(f"  {mark} 钩子批准   {h['host']}：{h['total']} 个钩子")
+        if not h["ok"]:
+            print(f"               · {h['detail']}")
+            for m in h["missing"]:
+                print(f"                 {m['event']} → {m['command']}")
     print()
     print(f"  __pycache__ 里 {payload['pyc_count']} 个 .pyc")
     if payload["pyc_count"]:
@@ -616,6 +914,8 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--query", help="按话题挑记忆（不给就取最近的）")
     c.add_argument("--no-soul", action="store_true", help="不注入人格块（宿主自己有人格时用）")
     c.add_argument("--now", help="钉住时间（回放/契约测试用，ISO 格式）")
+    c.add_argument("--session", help="会话标识：给了就做增量投影（只返回变化的部分）")
+    c.add_argument("--full", action="store_true", help="配合 --session：强制全量")
 
     t = sub.add_parser("tick", help="问一次该干什么")
     t.add_argument("--emit-silent", action="store_true")
@@ -681,6 +981,10 @@ def build_parser() -> argparse.ArgumentParser:
     rc.add_argument("--life-kind", default="watch", choices=list(life.KIND_VERB))
     rc.add_argument("--life-detail", default="")
     rc.add_argument("--said", default="")
+    rc.add_argument("--turn-id", dest="turn_id", default="",
+                    help="本轮唯一标识：同一个 turn 重试不会重复改变状态或费用")
+    rc.add_argument("--usage", default="",
+                    help="本轮真实用量 JSON：{model, fresh_tokens, cached_tokens, output_tokens}")
 
     op = sub.add_parser("opinion", help="她的判断")
     op.add_argument("action", choices=["list", "add", "reinforce", "weaken", "stats"], nargs="?", default="list")
@@ -707,11 +1011,14 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--mode", choices=["reply", "lurk"], default="reply")
 
     sk = sub.add_parser("sticker", help="表情库")
-    sk.add_argument("action", choices=["stats", "add", "pick", "send"], nargs="?", default="stats")
+    sk.add_argument("action", choices=["stats", "add", "pick", "send", "seed", "extract"],
+                    nargs="?", default="stats")
     sk.add_argument("path", nargs="?", default="")
     sk.add_argument("--mood", default="", choices=[""] + sticker.MOODS)
     sk.add_argument("--tags", nargs="*")
     sk.add_argument("--name", default="")
+    sk.add_argument("--force", action="store_true", help="seed：覆盖已存在的内置表情")
+    sk.add_argument("--limit", type=int, default=50, help="extract：整目录时最多取几张")
 
     d = sub.add_parser("device", help="手：看屏幕 / 动作 / 打开")
     d.add_argument("action", choices=["look", "observe", "act", "open", "list", "focus", "log", "replay"])
@@ -756,19 +1063,58 @@ def build_parser() -> argparse.ArgumentParser:
     bl.add_argument("--force", action="store_true", help="绕过每日额度与间隔")
     bl.add_argument("--json", action="store_true")
 
-    a = sub.add_parser("ask", help="她动手前的请示：列表/答应/拒绝")
-    a.add_argument("action", choices=["list", "allow", "deny"])
+    a = sub.add_parser("ask", help="她动手前的请示：列表/答应/拒绝/回填")
+    a.add_argument("action", choices=["list", "allow", "deny", "reply"])
     a.add_argument("--id", default="", help="请求 id（allow/deny 要）")
+    a.add_argument("--text", default="", help="主人原话（reply 要）：'可以' / '别' / '算了'")
     a.add_argument("--json", action="store_true")
 
     sv = sub.add_parser("serve", help="把事件流开成 HTTP（只读，默认只绑本机）")
     sv.add_argument("--host", default="127.0.0.1")
     sv.add_argument("--port", type=int, default=7788)
 
-    sub.add_parser("doctor", help="体检：模块/外部工具/杀软误报位置")
+    sub.add_parser("doctor", help="体检：模块/外部工具/杀毒误报位置")
+
+    cn = sub.add_parser("connect", help="把 companion 接到本机已装的宿主（hermes/dsh/openclaw/codex）")
+    cn.add_argument("hosts", nargs="*", default=[], help="要接的宿主；不写=全部已装")
+    cn.add_argument("--dry-run", action="store_true", help="只打印计划，不改文件")
+    cn.add_argument("--status", action="store_true", help="只探测，不写")
+    cn.add_argument("--rollback", action="store_true", help="还原到最近一次备份")
+    cn.add_argument("--force", action="store_true", help="已存在的配置也覆盖（谨慎）")
+    cn.add_argument("--json", action="store_true", dest="as_json", help="机器可读输出")
+    cn.add_argument("--hermes-home", default="", help="hermes 目录（默认 $HERMES_HOME 或 ~/.hermes）")
+    cn.add_argument("--dsh-home", default="", help="dsh 目录（默认 $DSH_HOME 或 ~/.dsh）")
+    cn.add_argument("--openclaw-home", default="", help="openclaw 目录（默认 ~/.openclaw）")
+    cn.add_argument("--codex-home", default="", help="codex 目录（默认 $CODEX_HOME 或 ~/.codex）")
+    cn.add_argument("--dsh-spec", default="", help="dsh 插件来源（默认 git+https://github.com/Yullieuli/companion-kit.git）")
+
+    rs = sub.add_parser("resume", help="断点续传：找出说了但没写回的轮次")
+    rs.add_argument("action", choices=["pending", "settle"], nargs="?", default="pending")
+    rs.add_argument("--turn-id", default="")
+
+    ds = sub.add_parser("distill", help="记忆自动提炼：从流水里挖值得记住的模式")
+    ds.add_argument("action", choices=["review", "candidates", "accept"], nargs="?", default="review")
+    ds.add_argument("--summary", default="")
+    ds.add_argument("--title", default="")
+    ds.add_argument("--body", default="")
+    ds.add_argument("--tags", nargs="*")
+
+    hb = sub.add_parser("heartbeat", help="心跳：宿主每次醒来写一次（看门狗用）")
+    hb.add_argument("--host", default="cli")
 
     mc = sub.add_parser("mcp", help="MCP 服务（stdio）")
     mc.add_argument("--list", action="store_true", help="只列工具，不进服务循环")
+
+    wbp = sub.add_parser("webpage", help="把网页变成能进上下文的一段话（摘要/挑页/缓存）")
+    wbp.add_argument("action", choices=["read", "pick", "stats", "extract"], nargs="?", default="stats")
+    wbp.add_argument("--url", default="", help="read：页面地址")
+    wbp.add_argument("--html", default="", help="read：HTML（不给就用缓存）")
+    wbp.add_argument("--file", default="", help="read：从文件读 HTML")
+    wbp.add_argument("--query", default="", help="pick：按什么挑")
+    wbp.add_argument("--pages", default="", help="pick：JSON 数组（title/url/snippet）")
+    wbp.add_argument("--focus", default="", help="read：摘要聚焦什么")
+    wbp.add_argument("--max-chars", dest="max_chars", type=int, default=1200)
+    wbp.add_argument("--ttl", type=int, default=600, help="缓存多久算新鲜（秒）")
     return p
 
 
@@ -830,8 +1176,20 @@ def main(argv: list[str] | None = None) -> int:
         "serve": cmd_serve,
         "mcp": cmd_mcp,
         "doctor": cmd_doctor,
+        "connect": cmd_connect,
+        "resume": cmd_resume,
+        "distill": cmd_distill,
+        "heartbeat": cmd_heartbeat,
+        "webpage": cmd_webpage,
     }
     try:
+        if args.cmd in {
+            "init", "tick", "say", "memory", "life", "person", "device", "group",
+            "react", "opinion", "mood", "sticker", "voice", "bili", "ask",
+            "resume", "distill", "heartbeat", "webpage",
+        }:
+            with home.lock("store"):
+                return table[args.cmd](home, args)
         return table[args.cmd](home, args)
     except KeyboardInterrupt:
         return 130

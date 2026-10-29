@@ -33,6 +33,9 @@ REINFORCE = 0.12
 WEAKEN = 0.20
 RETIRE_BELOW = 0.25
 BELIEF_AT = 0.70
+# hunch 里"认真写过"的下限。add() 的默认值就在这条线上。
+# 低于它的是随口一猜（0.3），高于的是她想过、觉得成立、只是还没验证。
+HUNCH_SHOW_AT = 0.45
 DECAY_PER_DAY = 0.998
 
 
@@ -209,8 +212,39 @@ def relevant(home: Home, query: str = "", *, limit: int = 4) -> list[Opinion]:
     return [o for _, o in scored[:limit]]
 
 
-def render(home: Home, query: str = "", *, limit: int = 4, max_chars: int = 600) -> str:
+def render(home: Home, query: str = "", *, limit: int = 4, max_chars: int = 600,
+           settled_only: bool = False, recent_days: float = 0) -> str:
+    """给 context 的一段：她自己的判断。
+
+    `settled_only=True` 时只要**认真写下的**（belief，或 confidence ≥ 0.45 的 hunch），
+    随口猜的（0.3 那种）不进。
+
+    为什么不是"只要 belief"：BELIEF_AT=0.70，而 add() 默认 0.45 ——
+    她写完的观点必须被反复 reinforce 才够得着 0.70，而 reinforce 要她先说出来，
+    说出来又要观点先在上下文里。**闭环锁死了**：2026-10-29 真机上她 4 条观点
+    全是 0.5，一条都没进过上下文，所以主人问她"做这个有啥用"，
+    她只能答"我今天刷了六个显卡评测"——她手里只有流水，没有判断。
+    放行 0.45 以上的 hunch，并标注「还没想定」，比滤光真实。
+
+    `recent_days > 0` 时，query 匹配不满 limit 就用**最近写的**补上：
+    她刚看完东西写下的判断，就是"此刻正在想的事"，哪怕和这句话字面无关。
+    """
     picks = relevant(home, query, limit=limit)
+    if settled_only:
+        # 要多取一些再筛，否则 limit=4 可能一条都不剩
+        picks = relevant(home, query, limit=limit * 4)
+        picks = [
+            o for o in picks
+            if o.stage == "belief" or (o.stage == "hunch" and o.confidence >= HUNCH_SHOW_AT)
+        ][:limit]
+    if recent_days and len(picks) < limit:
+        have = {o.id for o in picks}
+        fresh = [
+            o for o in _load(home)
+            if o.stage != "retired" and o.id not in have and o.confidence >= HUNCH_SHOW_AT
+        ]
+        fresh.sort(key=lambda o: str(o.at or ""), reverse=True)
+        picks = picks + fresh[: limit - len(picks)]
     if not picks:
         return ""
     lines = ["【你自己的看法】"]

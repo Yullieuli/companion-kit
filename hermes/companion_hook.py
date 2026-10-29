@@ -11,7 +11,7 @@ hermes 的 shell hook 协议：stdin 收 JSON，stdout 回 JSON（`{"context": "
 
 装法（不激活前先手动测）：
     echo '{"session_id":"t","platform":"napcat","user_message":"在吗"}' \
-      | COMPANION_HOME=/mnt/c/Users/Anran/.companion \
+      | COMPANION_HOME=/mnt/c/Users/you/.companion \
         ~/.companion-venv/bin/python ~/.hermes/scripts/companion_hook.py
 
 激活 = 在 ~/.hermes/config.yaml 的 hooks.pre_llm_call 里加一条 command，
@@ -26,9 +26,33 @@ import sys
 from pathlib import Path
 
 DEFAULT_HOME = str(Path.home() / ".companion")
-BUDGET = int(os.environ.get("COMPANION_INJECT_BUDGET", "1200") or 1200)
+# 1600 而不是 1200：常驻块（人格 + 人物卡 + 生活）本身就 ~1000 字，
+# 1200 会把 life 挤到截断边缘；等记忆和看法攒起来更不够。
+# hermes 的 system prompt 已经 8k token，多这几百字不算什么。
+BUDGET = int(os.environ.get("COMPANION_INJECT_BUDGET", "1600") or 1600)
 # 只在聊天平台注入，cron 会话拿的是自己的提示词，不需要再叠一层
 CHAT_PLATFORMS = {"napcat", "qq", "onebot"}
+
+# 部署时和 companion_shared.py 同目录（hermes/scripts/）——
+# payload 规范化是三个钩子共用的逻辑，别各抄一份然后改出三个样。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from companion_shared import normalize_payload as _normalize
+except ImportError:  # 单文件跑（没部署全）就本地实现，行为一致
+    def _normalize(payload: dict) -> dict:
+        if not isinstance(payload, dict):
+            return payload
+        out = dict(payload)
+        extra = out.pop("extra", None)
+        if isinstance(extra, dict):
+            for k, v in extra.items():
+                if out.get(k) in (None, ""):
+                    out[k] = v
+        if isinstance(out.get("tool_input"), dict) and not isinstance(out.get("args"), dict):
+            out["args"] = out["tool_input"]
+        elif isinstance(out.get("args"), dict) and not isinstance(out.get("tool_input"), dict):
+            out["tool_input"] = out["args"]
+        return out
 
 
 def _text_of(raw) -> str:
@@ -61,30 +85,10 @@ def _note(line: str) -> None:
 
 
 SAID_STATE = "logs/.hook_said.json"
-CTX_STATE = "logs/.hook_ctx.json"
+CTX_STATE = "logs/.hook_ctx.json"     # 旧路径：投影状态已迁到 core 的 context/projection.json
 # 每 N 轮强制整段重发一次。历史被压缩/裁剪时，之前注入的那份可能已经不在了，
 # 只发"变化块"会让她丢掉状态；这个数字就是"最多陈旧几轮"。
 FULL_EVERY = int(os.environ.get("COMPANION_FULL_EVERY", "6") or 6)
-
-
-def _ctx_state(home) -> dict:
-    import json as _json
-
-    try:
-        d = _json.loads((home.root / CTX_STATE).read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else {}
-    except Exception:
-        return {}
-
-
-def _save_ctx_state(home, data: dict) -> None:
-    import json as _json
-
-    p = home.root / CTX_STATE
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(_json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(p)
 
 
 def _render_delta(home, session: str, ctx) -> str:
@@ -92,37 +96,14 @@ def _render_delta(home, session: str, ctx) -> str:
 
     省的是**每一轮重复注入同一段前缀**的钱；不这么做的话，
     700 字的状态每轮都重发一次，10 轮就是 7000 字。
+
+    投影逻辑已经下沉到 core（companion.context.project）：hermes、dsh、MCP
+    必须用同一套指纹与全量周期，否则同一个 store 会出现三种"去重口径"。
     """
-    import re
-    from datetime import datetime
+    from companion import context as context_mod
 
-    def _key(text: str) -> str:
-        """比对用的指纹：把「【现在】周三 17:39」里的时间抹掉。
-
-        不抹的话状态块每分钟都"变了"，去重等于没做——每一轮都会重发一遍。
-        真正要发的时候发的仍是带时间的原文。
-        """
-        return re.sub(r"(?m)^【现在】.*$", "【现在】", text or "")
-
-    st = _ctx_state(home)
-    prev = st.get(session) if isinstance(st.get(session), dict) else {}
-    seen = prev.get("blocks") if isinstance(prev.get("blocks"), dict) else {}
-    count = int(prev.get("count") or 0)
-    now_map = {b.name: _key(b.text) for b in ctx.blocks}
-    changed = [b for b in ctx.blocks if seen.get(b.name) != _key(b.text)]
-    full = (not seen) or (count % FULL_EVERY == 0)
-
-    st[session] = {"blocks": now_map, "count": count + 1,
-                   "at": datetime.now().isoformat(timespec="seconds")}
-    if len(st) > 40:                      # 别让它无限长
-        st = dict(list(st.items())[-40:])
-    _save_ctx_state(home, st)
-
-    if full:
-        return ctx.text
-    if not changed:
-        return ""
-    return "【状态更新】\n" + "\n\n".join(b.text for b in changed)
+    proj = context_mod.project(home, session, ctx, full_every=FULL_EVERY)
+    return proj.text
 
 
 def _msg_text(raw) -> str:
@@ -215,6 +196,10 @@ def main() -> int:
         payload = json.loads(sys.stdin.read() or "{}")
     except Exception:
         payload = {}
+    # hermes 把 user_message / turn_id / platform 等塞在 extra 里 ——
+    # 不规范化就读不到：相关检索一直是空查询、ask 回填拿不到主人的原话
+    #（2026-10-29 实测踩过：pre 注入能跑，但 user_text 永远是空）。
+    payload = _normalize(payload)
 
     session = str(payload.get("session_id") or "")
     platform = str(payload.get("platform") or "")
@@ -236,6 +221,15 @@ def main() -> int:
         return 0
 
     home = Home.at(os.environ.get("COMPANION_HOME") or DEFAULT_HOME)
+
+    # 心跳：hermes 每次注入前都写一次。看门狗据此判断她是"卡住"还是"死了"。
+    # 写失败不影响注入——心跳只是体检用的。
+    try:
+        from companion import watchdog as wd_mod
+
+        wd_mod.beat(home, host=os.environ.get("COMPANION_HOST", "hermes"))
+    except Exception as e:
+        _note(f"beat-skip {type(e).__name__}: {e}")
 
     # 记一笔"主人最后说话时间"：沉默衰减（3 天降额、7 天归零）靠它。
     # 不记的话 companion 永远以为他刚说过话，衰减机制等于没开。
@@ -275,6 +269,25 @@ def main() -> int:
         except Exception:
             pass
 
+    # 主人在聊天里回了话 → 自动落��对应的待办上。
+    # 不做这一步，主人说"可以"之后还得有人手敲 `companion ask allow <id>`，
+    # 一道没人记得的手工步骤，流程就等于没有。
+    # 身份：只有私聊会话才算主人。群里别人说"可以"不能算数。
+    if user_text.strip() and not str(payload.get("group_id") or payload.get("is_group") or ""):
+        try:
+            from companion import ask as ask_mod
+
+            r = ask_mod.decide_by_reply(home, user_text, by="owner")
+            if r.get("ok"):
+                _note(f"ask 自动回填：{r.get('intent')} → {r['ask'].get('id')}")
+                # 她问过、主人答了 —— 这条请示确实说出口了
+                try:
+                    ask_mod.mark_spoken(home, str(r["ask"].get("id")))
+                except Exception:
+                    pass
+        except Exception as e:
+            _note(f"ask-reply-skip {type(e).__name__}: {e}")
+
     try:
         ctx = ctx_mod.build(
             home,
@@ -282,7 +295,7 @@ def main() -> int:
             # hermes 的 system prompt 里已经有人格，这里只补她没有的状态与记忆
             include_soul=False,
             memory_text=memory.render(home, user_text),
-            opinion_text=opinion.render(home, user_text),
+            opinion_text=opinion.render(home, user_text, limit=2, settled_only=True, recent_days=3),
             person_text=people.render(home, people.OWNER),
             life_text=life.render(home),
         )
@@ -313,16 +326,36 @@ def main() -> int:
         from companion import guard
 
         said_recent = guard.recent_said(home, minutes=guard.TOPIC_MINUTES, now=_dt.now())
-        if len(said_recent) >= 2:
-            tail = "；".join(str(r.get("text") or "")[:24] for r in said_recent[-3:])
-            hint = f"【别重复】你刚说过：{tail}。这轮换个说法，或者干脆不接。"
-            from companion.context import Block
+        if said_recent:
+            # 只摆最近那一句。三条一起摆，她会以为"这些都不许说"，反而哑掉。
+            # 措辞也别说"换个说法或不接"——正常延续话题时那句话会挡路，
+            # 该挡的只是"原样再发一遍"。
+            last = str(said_recent[-1].get("text") or "").replace("\n", " ")[:40]
+            if last:
+                hint = f"【别复读】你刚说过：{last}……原样再说一遍，等于没听见他。"
+                from companion.context import Block
 
-            ctx.blocks.append(Block("repeat", hint, 90))
-            ctx.text = ctx.text + "\n\n" + hint
-            text = ctx.text
+                ctx.blocks.append(Block("repeat", hint, 90))
+                ctx.text = ctx.text + "\n\n" + hint
+                text = ctx.text
     except Exception as e:
         _note(f"hint-skip {type(e).__name__}: {e}")
+
+    # 把"她在等主人点头的事"摆出来：请示单没人呈现就等于没问过。
+    try:
+        from companion import ask as ask_mod
+
+        waiting = ask_mod.pending(home)
+        if waiting:
+            items = "；".join(str(r.get("say") or r.get("action") or "")[:60] for r in waiting[:3])
+            block = f"【等你点头】{items}（主人答应后你才能动手）"
+            from companion.context import Block
+
+            ctx.blocks.append(Block("ask", block, 95))
+            ctx.text = ctx.text + "\n\n" + block
+            text = ctx.text
+    except Exception as e:
+        _note(f"ask-skip {type(e).__name__}: {e}")
 
     if not text:
         return _empty("empty-context")

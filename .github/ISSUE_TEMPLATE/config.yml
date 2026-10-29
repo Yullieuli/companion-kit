@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全问题
+    url: https://github.com/Yullieuli/companion-kit/security/advisories/new
+    about: 凭据泄露、权限绕过、注入类问题请走私密渠道，不要开公开 issue
+  - name: 使用问题 / 想法
+    url: https://github.com/Yullieuli/companion-kit/discussions
+    about: 不确定是不是 bug、想聊设计思路，去 Discussions

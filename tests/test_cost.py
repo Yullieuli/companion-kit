@@ -47,6 +47,48 @@ class LedgerTest(unittest.TestCase):
                          fresh_tokens=10000, output_tokens=300)
         self.assertAlmostEqual(cost.today_total(self.home, T0), 0.0448 + 0.0224, places=4)
 
+    def test_same_turn_id_is_recorded_only_once(self):
+        first = cost.record_turn(
+            self.home, now=T0, turn_id="turn-1", session="session-1",
+            fresh_tokens=1000, output_tokens=100,
+        )
+        duplicate = cost.record_turn(
+            self.home, now=T0, turn_id="turn-1", session="session-1",
+            fresh_tokens=9000, output_tokens=900,
+        )
+
+        rows = cost.load_rows(self.home)
+        self.assertFalse(first["duplicate"])
+        self.assertTrue(duplicate["duplicate"])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["turn_id"], "turn-1")
+        self.assertEqual(rows[0]["session"], "session-1")
+        self.assertEqual(cost.today_total(self.home, T0), first["cost"])
+
+    def test_different_turn_ids_accumulate(self):
+        first = cost.record_turn(self.home, now=T0, turn_id="turn-1", fresh_tokens=1000)
+        second = cost.record_turn(self.home, now=T0, turn_id="turn-2", fresh_tokens=2000)
+
+        self.assertFalse(second["duplicate"])
+        self.assertEqual(len(cost.load_rows(self.home)), 2)
+        self.assertEqual(cost.today_total(self.home, T0), round(first["cost"] + second["cost"], 6))
+
+    def test_calls_without_turn_id_remain_append_only(self):
+        first = cost.record_turn(self.home, now=T0, fresh_tokens=1000)
+        second = cost.record_turn(self.home, now=T0, fresh_tokens=2000)
+
+        self.assertFalse(first["duplicate"])
+        self.assertFalse(second["duplicate"])
+        self.assertEqual(len(cost.load_rows(self.home)), 2)
+        self.assertEqual(cost.today_total(self.home, T0), round(first["cost"] + second["cost"], 6))
+
+    def test_negative_tokens_are_rejected(self):
+        for field in ("fresh_tokens", "cached_tokens", "output_tokens"):
+            with self.subTest(field=field):
+                with self.assertRaises(ValueError):
+                    cost.record_turn(self.home, now=T0, **{field: -1})
+        self.assertEqual(cost.load_rows(self.home), [])
+
     def test_default_model_is_the_one_she_runs(self):
         # 默认跟着她实际在跑的模型走，否则记账金额会系统性偏离账单
         row = cost.record_turn(self.home, now=T0, fresh_tokens=1_000_000)

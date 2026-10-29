@@ -16,7 +16,7 @@ hermes 的判定是"输出变了就起会话"，而空输出现在被当作"没�
     所以这里也不打印 WAKE。**不为一段视频起一次会话**，这是成本约束不是省事。
 
 测法（不激活）：
-    COMPANION_HOME=/mnt/c/Users/Anran/.companion \
+    COMPANION_HOME=/mnt/c/Users/you/.companion \
       ~/.companion-venv/bin/python ~/.hermes/scripts/companion_wake.py
     # 有输出 = 这次会叫她；没输出 = 继续睡
 

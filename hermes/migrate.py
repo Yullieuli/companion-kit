@@ -11,7 +11,7 @@
 companion 的 SOUL.md 留作模板，适配层用 `include_soul=False` 跳过它。
 
 用法：
-    COMPANION_HOME=/mnt/c/Users/Anran/.companion \\
+    COMPANION_HOME=/mnt/c/Users/you/.companion \\
       ~/.companion-venv/bin/python migrate.py --from ~/.hermes --dry-run
     （去掉 --dry-run 才真写；重复跑不会产生重复条目）
 """

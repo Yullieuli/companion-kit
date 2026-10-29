@@ -94,12 +94,11 @@ class ContractTest(unittest.TestCase):
         return out
 
     def _direct(self, *, budget: int = 900, no_soul: bool = False) -> dict:
-        return ctx_mod.build(
+        # 走 compose 而不是自己拼一遍 render 参数：
+        # 自己拼就等于第五种拼法，口径一漂契约测试就会红（2026-10-29 真红过一次）。
+        # 契约测试要保证的正是"只有一种拼法"。
+        return ctx_mod.compose(
             self.home, now=NOW, budget=budget, include_soul=not no_soul,
-            memory_text=memory.render(self.home, ""),
-            opinion_text=opinion.render(self.home, ""),
-            person_text=people.render(self.home, people.OWNER),
-            life_text=life.render(self.home),
         ).as_dict()
 
     def test_three_entries_are_byte_identical(self):

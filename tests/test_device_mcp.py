@@ -25,7 +25,20 @@ class GateTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def _enable(self):
+        cfg = device.config(self.home)
+        cfg["enabled"] = True
+        self.home.save_json("devices.json", cfg)
+
+    def test_default_disables_device_control(self):
+        cfg = device.config(self.home)
+        self.assertFalse(cfg["enabled"])
+        v = device.check(self.home, target="desktop", action="look")
+        self.assertFalse(v.ok)
+        self.assertIn("没开", v.reason)
+
     def test_disabled_blocks_everything(self):
+        self._enable()
         cfg = device.config(self.home)
         cfg["enabled"] = False
         self.home.save_json("devices.json", cfg)
@@ -34,30 +47,60 @@ class GateTest(unittest.TestCase):
         self.assertIn("没开", v.reason)
 
     def test_non_owner_blocked(self):
+        self._enable()
         v = device.check(self.home, target="desktop", action="look", is_owner=False)
         self.assertFalse(v.ok)
         self.assertIn("主人", v.reason)
 
     def test_dangerous_action_refused_without_asking(self):
+        self._enable()
         for word in ("关机", "卸载微信", "帮他转账", "读取密码"):
             v = device.check(self.home, target="desktop", action="open", args={"what": word})
             self.assertFalse(v.ok, word)
             self.assertIn("危险", v.reason)
 
     def test_allowlist_when_configured(self):
+        self._enable()
         cfg = device.config(self.home)
         cfg["allow"]["browser"]["domains"] = ["bilibili.com"]
+        cfg["allow"]["phone"]["packages"] = ["com.example.app"]
+        cfg["allow"]["desktop"]["windows"] = ["记事本"]
         self.home.save_json("devices.json", cfg)
         ok = device.check(self.home, target="browser", action="open", args={"what": "https://www.bilibili.com/x"})
         self.assertTrue(ok.ok, ok.reason)
+        launch = device.check(self.home, target="phone", action="launch", args={"package": "com.example.app"})
+        self.assertTrue(launch.ok, launch.reason)
+        focus = device.check(self.home, target="desktop", action="focus", args={"window": "记事本"})
+        self.assertTrue(focus.ok, focus.reason)
         bad = device.check(self.home, target="browser", action="open", args={"what": "https://bank.example.com"})
         self.assertFalse(bad.ok)
 
-    def test_empty_allowlist_means_no_restriction(self):
-        v = device.check(self.home, target="browser", action="open", args={"what": "https://anything.example"})
-        self.assertTrue(v.ok, v.reason)
+    def test_empty_allowlist_rejects_open_launch_and_focus(self):
+        self._enable()
+        cases = [
+            ("browser", "open", {"what": "https://anything.example"}),
+            ("phone", "launch", {"package": "com.example.app"}),
+            ("desktop", "focus", {"window": "记事本"}),
+        ]
+        for target, action, args in cases:
+            with self.subTest(target=target, action=action):
+                v = device.check(self.home, target=target, action=action, args=args)
+                self.assertFalse(v.ok)
+                self.assertIn("白名单为空", v.reason)
+
+    def test_partial_allow_config_keeps_default_targets(self):
+        self.home.save_json("devices.json", {
+            "enabled": True,
+            "allow": {"browser": {"domains": ["example.com"]}},
+        })
+        cfg = device.config(self.home)
+        self.assertEqual(cfg["allow"]["browser"]["domains"], ["example.com"])
+        self.assertEqual(cfg["allow"]["phone"], {"packages": []})
+        self.assertEqual(cfg["allow"]["desktop"], {"windows": []})
+        self.assertEqual(cfg["allow"]["game"], {"windows": []})
 
     def test_idempotent_window(self):
+        self._enable()
         now = time.time()
         args = {"x": 10, "y": 20}
         self.assertTrue(device.check(self.home, target="desktop", action="tap", args=args, now=now).ok)
@@ -69,17 +112,20 @@ class GateTest(unittest.TestCase):
         self.assertTrue(later.ok, later.reason)
 
     def test_look_on_unknown_target(self):
+        self._enable()
         out = device.look(self.home, "toaster")
         self.assertFalse(out["ok"])
         self.assertIn("不认识", out["error"])
 
     def test_refusal_is_logged(self):
+        self._enable()
         device.look(self.home, "desktop", serial="") if False else None
         device.check(self.home, target="desktop", action="look", is_owner=False)
         rows = device.log_tail(self.home)
         self.assertTrue(all("at" in r for r in rows))
 
     def test_act_refused_does_not_touch_screen(self):
+        self._enable()
         out = device.act(self.home, "desktop", "tap", {"x": 1, "y": 1}, is_owner=False)
         self.assertFalse(out["ok"])
         self.assertNotIn("after", out)
@@ -191,6 +237,9 @@ class InputTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.home = Home.at(self.tmp.name)
         self.home.init()
+        cfg = device.config(self.home)
+        cfg["enabled"] = True
+        self.home.save_json("devices.json", cfg)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -237,6 +286,9 @@ class ObserveTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.home = Home.at(self.tmp.name)
         self.home.init()
+        cfg = device.config(self.home)
+        cfg["enabled"] = True
+        self.home.save_json("devices.json", cfg)
         self.shot = self.home.root / "fake.png"
         self.shot.write_bytes(b"\x89PNG\r\n\x1a\n fake")
 
@@ -396,3 +448,66 @@ class ReplayTest(unittest.TestCase):
         out = device.replay(self.home, 5)
         self.assertEqual(out["steps"], [])
         self.assertIn("没有可回放", out["hint"])
+
+
+class McpOwnerTest(unittest.TestCase):
+    """MCP 层的主人识别：只信 devices.json 的 mcp_owner，不信模型传的布尔值。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Home.at(self.tmp.name)
+        self.home.init()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _enable(self, mcp_owner=False):
+        cfg = device.config(self.home)
+        cfg["enabled"] = True
+        cfg["mcp_owner"] = mcp_owner
+        cfg["allow"]["desktop"]["windows"] = ["notepad"]
+        self.home.save_json("devices.json", cfg)
+
+    def test_default_denies_everything(self):
+        # 新 store：MCP 上看/动/开一律拒绝
+        look = mcp._t_look(self.home, {"target": "desktop"})
+        self.assertFalse(look["ok"])
+        self.assertIn("没开", look["error"])
+        act = mcp._t_act(self.home, {"target": "desktop", "action": "tap", "x": 1, "y": 2})
+        self.assertFalse(act["ok"])
+        opened = mcp._t_open(self.home, {"target": "desktop", "what": "notepad"})
+        self.assertFalse(opened["ok"])
+
+    def test_model_claimed_owner_is_ignored(self):
+        """模型把 is_owner 传成 true 也没用：那是参数，不是凭据。"""
+        self._enable(mcp_owner=False)
+        act = mcp._t_act(self.home, {"target": "desktop", "action": "tap",
+                                     "x": 1, "y": 2, "is_owner": True})
+        self.assertFalse(act["ok"])
+        self.assertIn("主人", act["error"])
+        opened = mcp._t_open(self.home, {"target": "desktop", "what": "notepad",
+                                         "is_owner": True})
+        self.assertFalse(opened["ok"])
+        look = mcp._t_look(self.home, {"target": "desktop", "is_owner": True})
+        self.assertFalse(look["ok"])
+        self.assertIn("主人", look["error"])
+
+    def test_owner_config_enables_mcp_session(self):
+        self._enable(mcp_owner=True)
+        with patch.object(device, "act",
+                          return_value={"ok": True, "before": "b.png", "after": "a.png"}) as act_mock:
+            act = mcp._t_act(self.home, {"target": "desktop", "action": "tap", "x": 1, "y": 2})
+        self.assertTrue(act["ok"])
+        # 传给 core 的 is_owner 来自配置，不是参数
+        self.assertTrue(act_mock.call_args.kwargs["is_owner"])
+        with patch.object(device, "open_thing", return_value={"ok": True}) as open_mock:
+            opened = mcp._t_open(self.home, {"target": "desktop", "what": "notepad"})
+        self.assertTrue(opened["ok"])
+        self.assertTrue(open_mock.call_args.kwargs["is_owner"])
+
+    def test_look_passes_gate_when_owner(self):
+        self._enable(mcp_owner=True)
+        with patch.object(device, "look", return_value={"ok": True, "shot": "x.png"}) as look_mock:
+            out = mcp._t_look(self.home, {"target": "desktop"})
+        self.assertTrue(out["ok"])
+        look_mock.assert_called_once()

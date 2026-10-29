@@ -162,7 +162,11 @@ def _candidates(s: Situation) -> list[Candidate]:
     why = []
     if s.pending_life:
         score += 0.25
-        why.append(f"有 {s.pending_life} 件生活里的事还没跟他说")
+        # 说**具体那一件**，不报条数。
+        # 报条数（"有 6 件生活里的事还没跟他说"）时，模型会把理由当台词念，
+        # 张口就是"今天一口气刷了六条硬件评测"——2026-10-29 真机原话。
+        hint = str((s.extra or {}).get("pending_life_hint") or "")
+        why.append(f"你{hint}，还没跟他说" if hint else "有点事没跟他说")
     if s.owner_waiting:
         score += 0.20
         why.append("他刚说完话，接着聊最自然")

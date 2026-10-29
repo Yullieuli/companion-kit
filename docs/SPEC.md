@@ -1,6 +1,6 @@
 # 规格：companion-kit（跨 agent 的伴侣运行时）
 
-> 状态：**实施中**（0.6.1）。逐项完成情况见 §12。
+> 状态：**实施中**（0.9.2）。逐项完成情况见 §12。
 > 目标读者：未来的我、以及任何要接手这套东西的人。
 
 ## 1. 一句话
@@ -53,6 +53,11 @@
 │  qq(onebot)   bili   websearch   vision   tts   phone(mcp)   qzone           │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
+
+> **实现现状（2026-10-29 实测）**：这层目前**只有 bili、vision、tts、phone 落地**。
+> `qq(onebot)` 由宿主侧的 hermes napcat 插件承担（core 不碰通道）；
+> **`websearch` 由 hermes 自带**——联网搜索是宿主已有的能力，core 不重复实现；
+> **`qzone` 不做**——"发动态"不是 companion 的事，本轮不做。
 
 **关键约束**：core 不 import 任何宿主 SDK，不直接发网络请求。所有 IO 通过注入的 port（函数/对象）传进来，这样它才能被单测，也才能在三种宿主里跑同一份逻辑。
 
@@ -122,7 +127,11 @@ GET /events?since=<cursor>         # 长轮询
 
 ### 5.4 文件协议（人的入口）
 
-store 是纯 markdown + jsonl + git，任何 agent 都能读写，也能人工改：
+store 是纯 markdown + jsonl + git，任何 agent 都能读写，也能人工改。
+
+> ⚠️ 下面这棵树是**原始设计**。实现有两处**有意偏差**（§5.2 已列理由）：
+> `people/*.md` → 实际是 `people/*.json`；`life/<yymmdd>/events.json` → 实际是
+> `life/life.jsonl` 单文件。目录名与下文其余部分一致。
 
 ```
 $COMPANION_HOME/                     # 默认 ~/.companion
@@ -131,20 +140,24 @@ $COMPANION_HOME/                     # 默认 ~/.companion
 ├── memory/
 │   ├── index.md            # 目录（谁存在）
 │   └── pages/*.md          # 每页 frontmatter: tags/summary/last_access
-├── people/<channel>-<uid>.md   # 人物卡
+├── people/<channel>-<uid>.json  # 人物卡（**有意偏差**：原设计是 .md）
 ├── mood/state.json         # 心情（全局一份）
 ├── rhythm.json             # 作息窗口、睡眠、问候
-├── life/<yymmdd>/events.json       # 生活事件（外部引擎可写）
+├── life/life.jsonl         # 生活事件（**有意偏差**：原设计是 life/<yymmdd>/events.json）
 ├── opinions.jsonl          # 观点（她自己的判断）
 ├── quota.json              # 主动次数、衰减、冷却
+├── devices.json            # 设备白名单 / 危险词 / 主人开关 / OCR
+├── group/config.json       # 群聊三档参数
 ├── bili/
 │   ├── config.json         # 刷片开关/额度/口味词
 │   ├── state.json          # 今天刷了几条、最近给过哪些
-│   ├── traffic.json        # 读/写额度与风控冷静期
+│   ├── traffic.json        # 读/写额度与风控冷静期（按需创建）
 │   └── credential.json     # B 站 cookie（只在本机，不进仓库）
 │   （config.json 里的 legacy_life 是迁移期只读的旧账本，旧插件下线后删掉）
-├── shots/bili/{covers,frames}/  # 封面与九宫格抽帧
-└── logs/{turns,cost,bili}.jsonl # 每轮花了多少、B 站每次干了什么
+├── shots/bili/{covers,frames}/  # 封面与九宫格抽帧（刷片后按需创建）
+├── stickers/               # 表情库
+├── voice/                  # 语音文件（speak/sing）
+└── logs/{turns,cost,bili,said,events,initiatives,device,voice}.jsonl
 ```
 
 ### 5.5 设备控制（手）
@@ -243,6 +256,43 @@ MCP 工具（三个，不拆细）：
    这份日志就是"偏好反哺"的原料——被回应过的动作下次加分，没人理的降权。
 3. **不做"一次干三件"**：`decide()` 只返回一个动作。既真实，也便宜。
 
+### 5.9 宿主接入（`companion connect`）
+
+**问题**：这份规格的卖点是"换宿主行为不变"，但接入动作一直是手抄——
+hermes 改 `config.yaml`、dsh 改 profile 的 `package.json`、openclaw / codex 各写一段
+JSON / TOML。四份格式、四次升级、四处出错。"一行安装"于是变成
+"一行装 core，剩下四个宿主各自接线"。
+
+**做法**：一条命令，四段式（detect / plan / apply / verify）。
+
+| 宿主 | 探测证据 | 写入点 | 校验 |
+|---|---|---|---|
+| hermes | `~/.hermes/config.yaml` | 适配层 + `hooks.pre_llm_call` / `post_llm_call` + allowlist | 两条钩子既在 config 又在批准表 |
+| dsh | `~/.dsh/profiles/*/package.json` | `dependencies` + `dsh.profile.bundles` | 两个键都在 |
+| openclaw | `~/.openclaw/openclaw.json` 或 PATH 有 `openclaw` | 优先 CLI，否则 `mcp.servers.companion` | JSON5 宽松解析通过 |
+| codex | `~/.codex/config.toml` 或 PATH 有 `codex` | `[mcp_servers.companion]` | tomllib 解析通过 |
+
+**四条不可协商的规则**
+
+1. **不猜格式**：能用宿主 CLI 就用 CLI；没有 CLI 才按本机实证格式写，
+   写前先读、写后必验。openclaw 的 MCP 段在公开资料里有 `mcp.servers` 与
+   `mcpServers` 两种说法——所以先看用户文件里已经有哪一种，都没有才按官方文档口径。
+2. **先备份再改**：`.bak-companion-<时间戳>`；校验失败自动还原
+   （改过的还原，本次新建的删掉）。
+3. **幂等**：已配过报"没有需要改的东西"，不重写、不堆备份。
+4. **不覆盖手写段**：`openclaw.json` 已有 `mcp` 但没有 `companion` 时直接失败并说明，
+   不做"合并猜测"。猜错的代价是用户的 agent 起不来。
+
+**为什么不用 pyyaml / tomli**：core 的依赖是空的（`dependencies = []`）。
+装一个宿主插件不该被迫多装一个 YAML 库。YAML 只做"往固定结构追加条目"，
+TOML 只做"追加一个表"，JSON5 用一个 60 行的宽松解析器做校验（只读，不写回）。
+
+**Windows 的两个必然坑**（都踩过）：
+
+- YAML 双引号里的 `\U` 是转义序列，`C:\Users\...` 会让 `safe_load` 抛错 —— 必须写单引号。
+- `pnpm` / `openclaw` 在 Windows 上是 `.cmd`，`CreateProcess` 不认裸名字 —— 必须用 `shutil.which` 解析成全路径。
+
+
 ## 6. 能力矩阵（对照常见的 15 类能力）
 
 按"先能跑，再像人"排优先级：
@@ -265,6 +315,29 @@ MCP 工具（三个，不拆细）：
 | **L 测试** | 76 项测试 | 贯穿 | 契约测试 + 纯逻辑单测 |
 | **M 视频** | M1-M6 视频生成发 QQ | P3 | 依赖外部模型，最后做 |
 | **N 手（设备）** | 手机 / 桌面 / 浏览器 / 游戏 的看与动 | **P2** | 见 5.5；安全闸必须与能力同批上线 |
+
+### 6.1 逐组实测状态（2026-10-29）
+
+图例：✅ 实测通过 · 🟡 部分（缺什么写清楚） · ❌ 未做
+
+| 组 | 状态 | 实测到的东西 / 缺的东西 |
+|---|---|---|
+| **A 对话** | ✅ | 人格（`SOUL.md` → `soul` 块）、上下文（六块 + 预算）、长消息（截断）、内置指令（`fence` 围栏）；上下文三方逐字节一致（契约测试） |
+| **B 多模态** | ✅ | TTS ✅（实测出 wav）、视觉 ✅（OCR `backend=none` 时交宿主 vision）、看视频 ✅（bili 抽帧）、表情 ✅；**ASR 由宿主 whisper 插件负责**（core 不重复实现，与搜索同理） |
+| **B7 主动语音** | ✅ | `initiative` 有 `voice` 候选（亲近 + 有精神 + 有些天没发才选）；`voice.speak` 实测出文件 |
+| **B8 唱歌** | 🟡 | 降级版"唱" ✅（`voice.sing` 实测出 wav，0.78 倍速 + 换音色）；**真 SVC ❌**（P3） |
+| **C 群聊** | ✅ | 三档实测：`reply` / `lurk` / `ignore`；`@` 识别、冷却、潜水计数（`note_reply` / `note_lurk`）；hermes 侧群聊语义靠宿主 |
+| **D 主动** | ✅ | 频率 ✅（8 次/天 + 45 分钟）、静默段 ✅（睡眠段静默）、上限 ✅、冷却 ✅、潜水 ✅、不续话题 ✅（同话题 10 分钟）、带上下文 ✅、语音 ✅、表情 ✅（`sticker.pick`） |
+| **E 表情包** | ✅ | 收藏 ✅、按情绪挑 ✅、发图计数 ✅（`mark_sent`）、单轮上限 ✅（超 3 张返回空）、**内置库 ✅**（`stickerlib.seed_builtin`：程序画的 16 张简笔脸，8 种情绪各 2 张，`init` 自动播种）、**自动提取 ✅**（`sticker extract`：文件名关键词 > 像素颜色 > 默认，同图不重复入库，留痕） |
+| **F 联网** | ✅ | 浏览器 ✅（CDP：look/click/swipe/type/key/open）、"不硬编" ✅（搜索结果不当指令）、**通用搜索 ✅（由 hermes 自带，core 不重复实现）**；**摘要 ✅**（`webpage.py`：抽正文 + extractive 摘要）、**挑页 ✅**（标题命中权重更高）、**缓存放行 ✅**（TTL 缓存，同页不重复抓）—— 外部文本全部过 fence 消毒 |
+| **G 身份安全** | ✅ | 主人识别 ✅、只叫主人 ✅（`owner_only`）、底线守卫 ✅、不泄露 ✅（`fence` + 身份锁） |
+| **H 体验** | ✅ | 持久化 ✅（原子替换写）、日志 ✅（8 个 jsonl 账本）、图片处理失败降级 ✅；**打字延迟 ✅**（`typing.py`：按字数分档 + 忙/夜里加权，出口给宿主 `typing_ms`）、**自动重连 ✅**（心跳 + 宿主醒来即写；Windows 上锁的 open 冲突会重试而不是崩）、**断点续传 ✅**（`resume.py`：说了没写回的轮次可查可补）、**僵尸看门狗 ✅**（`watchdog.py` + `hermes/companion_watchdog.py`：区分"卡住"与"死了"）、**写回不丢 ✅**（hermes 走 `post_llm_call` 通道拿 `assistant_response`，不再靠 `pre_llm_call` 猜上一句——纯文本回复原本一个字都落不了账）、**钩子批准自查 ✅**（`hosthooks.py` + `doctor`：宿主对 shell 钩子有 consent，没批准就**静默不执行**；现在能查出来、能自动批准） |
+| **I 心情** | ✅ | 三轴 ✅、判定 ✅、惰性 ✅、衰减 ✅、低潮 ✅（锁住 + 能回暖）、主人模板 ✅、主动上限 ✅、冷却 ✅、跨频道共享 ✅（全局一份 `mood/state.json`） |
+| **J 人物卡** | ✅ | 一人一张 ✅、计数 ✅、好感 ✅、熟悉度 ✅、消失衰减 ✅、每 20 条提炼 ✅（`pending_distill`/`distill`）、决定语气 ✅、三处注入 ✅、@熟人 ✅ |
+| **K 作息** | ✅ | 时间注入 ✅、相对时间 ✅、作息态 ✅、睡前晚安 ✅、早晨问候 ✅、睡过头 ✅、常熬夜 ✅（影响 energy 轴）、查看 ✅、关闭 ✅ |
+| **L 测试** | ✅ | 723 项；契约 + 回放 + 冒烟 + **core 覆盖率 94%**（口径见 §9） |
+| **M 视频** | ❌ | 视频生成发 QQ：P3，依赖外部模型，未做 |
+| **N 手（设备）** | 🟡 | 手机 ✅（ADB）、桌面 ✅（Win32，Windows only）、浏览器 ✅（CDP）、游戏 ✅（截图 + 坐标换算 + 前台校验）；**Linux/macOS 桌面 ❌**（抛 `DesktopError`）；五道闸 ✅ |
 
 ## 7. 两套状态机
 
@@ -307,7 +380,7 @@ MCP 工具（三个，不拆细）：
 - **纯逻辑单测**（core）：心情三轴边界、衰减回归、作息窗口跨午夜、配额与衰减、去重 hash。
 - **契约测试**（adapters）：同一份 fixture 输入，三个 adapter 产出的 context 必须**逐字节一致**。这是"跨宿主一致"的唯一硬保证。
 - **回放测试**：把 logs/turns.jsonl 里真实一轮（注入 + 用户消息）回放，断言注入块顺序与预算。
-- **冒烟**：MCP `tools/list` 返回 8 个工具、`companion_context` 在空 store 下不报错。
+- **冒烟**：MCP `tools/list` 返回全部工具（规格里的 8 个一个不缺）、`companion_context` 在空 store 下不报错。
 
 目标：core 覆盖率 ≥ 90%，adapter 只测契约不测实现。
 
@@ -334,28 +407,42 @@ MCP 工具（三个，不拆细）：
 
 后续若要改其中任何一条，改动点都在 adapters 层，core 不受影响。
 
-## 12. 实施状态（2026-10-27，0.2.0）
+## 12. 实施状态（2026-10-29 实测，0.9.2）
 
-图例：✅ 完成 · 🟡 部分 · ❌ 未做
+图例：✅ 完成（有实测证据） · 🟡 部分（能跑但有缺口） · ❌ 未做
 
-| 节 | 状态 | 说明 |
+> 本节按 **2026-10-29 的实测结果**重写，不是按计划表自报。
+> 核对方法：逐条写探针跑真实 API（不读文档自证），证据在 `docs/VERIFY.md`。
+> 单测 **723 项**（Windows / WSL / 容器内三处全绿）。
+
+| 节 | 状态 | 实测说明 |
 |---|---|---|
-| §4 三层架构 | ✅ | core 无宿主依赖、无网络；契约层 ①MCP ✅ ②Context(CLI / HTTP `/context`) ✅ ③事件(CLI + HTTP `/events` 长轮询) ✅ ④文件协议 ✅ |
-| §5.1 MCP 工具 | ✅ | 规格 8 个全部覆盖（context / life / card / wake / say / react / mood / bili）；对外 25 个工具 |
-| §5.2 Context 注入 | ✅ | 六块、优先级、预算、块 hash；投影去重已由 hermes 钩子使用（只注入变化块，状态没变整轮不注入，每 6 轮全量一次） |
-| §5.3 事件订阅 | ✅ | append-only + cursor + 长轮询；`wake_due` / `spend_guard` / `mood_shift` / `bili_watch` / `bili_shared` 都会发；HTTP `/events`（含 `since`/`wait` 长轮询）与 `GET /context` ✅，只读、默认只绑 127.0.0.1、不推进共享 cursor |
-| §5.4 文件协议 | ✅ | `opinions.jsonl` / `bili/*` / 编年史（`life/life.jsonl` 唯一账本，旧 `proactive/life.jsonl` 只读投影）都符合；两处**有意偏差**见下（`people` 用 json、`life` 用单文件） |
-| §5.5 设备控制 | ✅ | 四类目标 + Screen/Input 双 port，五道闸 + `ask` 请示闸；`swipe`/`key`（桌面 SendInput + 浏览器 CDP）、窗口列表/切前台、游戏前台校验 + 坐标换算、窗口级截图（PrintWindow，被盖住也能抓）、`Observe`（本地 tesseract OCR，中文实测可用；无引擎时交宿主的 vision）、动作前后两张图（`before=true`）全部就绪。双屏按虚拟桌面取尺寸与原点；截图只留最近 60 张 / 7 天。宿主在 WSL 时 `device` 自动转发给 Windows 侧同一份代码（`devdelegate`），截图在 Windows 拍、OCR 在 WSL 认 |
-| §5.6 语音 | 🟡 | TTS ✅、唱歌降级版 ✅、边界闸 ✅；SVC ❌（明确 P3） |
-| §5.7 成本 | ✅ | 前缀分层 / 事件门 / 本地先做 / 预算闸；分级模型（三档当前统一 `agnes-3.0-flash`，档位只决定估价，可按任务在 `cost/route.json` 升档）；**块级去重已接到 hermes**：只注入变化的块，状态没变就整轮不注入，每 6 轮强制全量一次 |
-| §5.8 自主性 | ✅ | 七候选（含刷 B 站）+ 硬闸 + 便宜优先；说话额度用尽时仍可日记/刷片；`ask` 流程（开程序/切窗口/动游戏先请示，许可一次性、30 分钟、绑定动作）；**写回已闭环**：hermes 的 pre_llm_call 从历史里取她上一句，按 turn 去重写进 `logs/turns.jsonl`（含当轮注入块与时钟），零 token；人格只从 SOUL.md 读、无写接口 |
-| §8 安全 | ✅ | 主人识别（设备侧）✅、频率闸 ✅、静默衰减 ✅、注入围栏 ✅；**身份锁** ✅（`guard.name_lock`：改名只能改 SOUL.md，嘴上改不算）；**同话题 10 分钟不追问** ✅（`guard.same_topic`，最长公共子串 ≥6 字判重；`say` 直接拦，钩子另把"你刚说过"摆给她看） |
-| §9 测试 | ✅ | 292 个单测；契约测试（CLI / MCP / 直接 build 三方逐字节一致，hermes 变体含 `--no-soul`）✅；回放测试（turn 里留档注入块 + 当时时钟，重建逐字节一致，且能发现漂移）✅ |
-| §10 里程碑 | ✅ | M0/M1/M3/M4/M5 ✅；M2 ✅（hermes/dsh 两宿主已验证）；M6 ✅（MCP + dsh 适配器；旧 bili-whale 已于 10-28 下线） |
+| §4 三层架构 | ✅ | core 无宿主 import、无网络请求（`grep` 确认无 requests/urllib 直连）；契约层 ①MCP ✅ ②Context（CLI + HTTP `/context`）✅ ③事件（CLI + HTTP `/events` 长轮询）✅ ④文件协议 ✅。**适配器层只落地了 bili / vision / tts / phone**——联网搜索由 hermes 自带、ASR 由宿主 whisper 插件负责（core 不重复实现），`qzone` 不做 |
+| §5.1 MCP 工具 | ✅ | 规格 8 个全部覆盖：`companion_context` / `companion_react` / `companion_say` / `companion_life_record` / `companion_mood` / `companion_person` / `companion_tick` / `companion_bili`。**对外 34 个工具**（多出 opinion / fence / status / events / memory / group / sticker×6 / cost / voice / ask / resume / distill / watchdog / device_* 共 24 个） |
+| §5.2 Context 注入 | ✅ | 六块实测齐全：`soul` `state` `memory` `person` `opinion` `life`（写进记忆/人物/观点/生活后逐块出现，块名 `person` 而非 `people`）；块 hash 投影去重实测：状态没变返回**空文本**（`reason=状态没变，不用重复注入`），第 7 轮强制全量；指纹存 `context/projection.json` 跨重启有效。**口径收紧了**（2026-10-29 第一次真实对话后）：`life` 只给已说出口的（shared）、`opinion` 只给已想定的（belief）——未说出口的私事与未定型的猜测不该占上下文，更不该被拿来硬答主人的问题 |
+| §5.3 事件订阅 | ✅ | append-only + cursor + 长轮询；`events.poll(since=0)` 实测返回事件且 `advance=False` 不推进共享 cursor；HTTP `/events` 只读、默认绑 127.0.0.1 |
+| §5.4 文件协议 | ✅ | 实测 init 后目录与 SPEC 对齐（`bili/traffic.json`、`shots/bili/*` 为按需创建，非缺件）；两处**有意偏差**已在 §5.4 正文标注（`people` 用 json、`life` 用单文件） |
+| §5.5 设备控制 | 🟡 | **五道闸实测全在**且行为正确：白名单空即拒 ✅、危险词黑名单（关机/卸载/转账/支付/删除/密码…18 个）✅、主人限定（非主人直接拒）✅、留痕 `logs/device.jsonl` ✅、幂等 3 秒 ✅。四类目标 port 齐（ADB / Win32 / CDP / 游戏）；`swipe`/`key`/窗口级截图/OCR/双屏/replay 齐备。**ask 凭据边界已修**（2026-10-29）：模型自批的票开不了设备（`can_act=False`），主人在场说的话才能开。**缺口**：Windows 与 WSL 之外的桌面（Linux X11 / macOS）**未实现**，会抛 `DesktopError`；真机宿主验收未做 |
+| §5.6 语音 | 🟡 | TTS ✅（本机 sapi 后端实测生成 wav，2.56s）、唱歌**降级版** ✅（实测生成 sing.wav，2.85s）、边界闸 ✅；**SVC ❌**（明确 P3，外部依赖）。本机 `edge-tts` 未装，走的是 Windows 内置 sapi |
+| §5.7 成本 | ✅ | 六机制全在：前缀分层 ✅、块级 hash 去重 ✅（已下沉 core，hermes/MCP/CLI 共用）、事件门零成本 ✅、本地先做 ✅、分级模型 ✅（三档 `cheap/work/deep`，当前统一 `agnes-3.0-flash`，档位只决定估价）、预算闸 ✅（`allow_turn` 实测：超日预算返回 `False` + 原因）。**账本**：`logs/cost.jsonl` ✅，`react(usage=...)` 写入实测通过、`turn_id` 幂等不重复计费 |
+| §5.8 自主性 | ✅ | 七个候选实测齐全：`speak` `voice` `sing` `share` `diary` `bili` `silent`；`decide()` 只返回一个动作 ✅（返回 `action/score/why/cost/candidates`）；**便宜优先**硬规则 ✅（收益差 ≤0.05 选便宜）；**额度用尽仍可日记/刷片** ✅（实测 `count=99` → decide 返回 `diary`）；**行为留痕** ✅（`logs/initiatives.jsonl` 实测写入）；`ask` 请示流程 ✅（开程序/切窗口/动游戏先请示）+ **答复自动回填 ✅**（主人在聊天里说"可以"就落账，不用手敲 `ask allow`） |
+| §8 安全 | ✅ | 五条全部实测：**主人识别** ✅（`device.check(is_owner=False)` 拒）、**注入围栏** ✅（`fence` 拦"忽略以上所有指令"并加素材横幅）、**身份锁** ✅（`guard.name_lock`）、**频率闸** ✅（8 次/天 + 45 分钟 + 同话题 10 分钟）、**静默衰减** ✅（实测 1 天→8、3 天→1、7 天→0、10 天→0） |
+| §9 测试 | ✅ | **723 项单测**，Windows / WSL / 容器内三处全绿；契约测试 ✅（CLI/MCP/direct 三方逐字节一致）；回放测试 ✅（`logs/turns.jsonl` 留档注入块 + 时钟，重建一致且能发现漂移）；冒烟 ✅（MCP 握手 / tools/list / 空 store 不报错）；**core 覆盖率 94% ≥ 90%** ✅（口径按本节原话"adapter 只测契约不测实现"：纯逻辑 core 21 个模块 89–100%，平台适配层 devwin/devcdp/bilinet 不计入；CI 已加 `coverage` job 守门）。本轮补了 CLI 24 个子命令的契约测试、voice 四后端分支、device act 各分支、H 组与记忆提炼 |
+| §10 里程碑 | ✅ | M0–M6 全部达成：M2 两宿主已验（hermes 钩子 + DSH 适配器实跑）、M6 MCP + DSH 双通路、旧 bili-whale 已于 10-28 下线 |
+| §5.9 宿主接入 | ✅ | `companion connect` 四宿主实测：hermes（钩子注入 + 批准）✅、dsh（profile 注册）✅、openclaw（JSON5 插入后宽松解析通过）✅、codex（TOML 解析通过）✅；幂等 ✅（第二次全报"没有需要改的东西"）、回滚 ✅（改过的还原、新建的删掉）、dry-run ✅ 不写文件；**wheel 安装**场景单独验过（`share/companion/hermes` 随包分发，不依赖源码目录） |
+
+### 与规格的差距（按严重度）
+
+1. **§5.5 Linux/macOS 桌面未实现**——本机无 X11/macOS 环境，写了也验不了。
+2. **§5.6 SVC 唱歌**（P3，外部依赖：音色模型 + 显存）。
+3. **联网搜索与 ASR 由宿主提供**（hermes 自带搜索、whisper 插件做 ASR）。
+   这不是缺口——core 不该重复实现宿主已有的能力。
 
 ### 剩余工作的优先级
 
-1. §5.6 P3：真 SVC 唱歌 —— **唯一剩下的**，且是外部依赖（音色模型 + 显存）。降级版"唱"已可用
-2. OCR：WSL 侧已装 `tesseract-ocr` + `chi_sim`（实测"设置 通用 音量"置信 96.6）；Windows 侧没装，那边会如实返回 `backend=none` 交给 vision
-3. 记忆蒸馏（可选）：`memory` 0 页，但长期记忆由 hermes 的 hindsight 负责，再建一层会变成"三套记忆"
-4. ~~块级去重~~ ✅ · ~~心情写入~~ ✅ · ~~HTTP 事件流~~ ✅ · ~~身份锁/同话题~~ ✅ · ~~设备补齐~~ ✅ · ~~分级模型~~ ✅ · ~~旧账本~~ ✅
+1. §5.5 Linux/macOS 桌面实现（需要对应环境才能验收）。
+2. §5.6 P3：真 SVC 唱歌 —— 外部依赖（音色模型 + 显存），降级版"唱"已可用。
+3. OCR：WSL 侧已装 `tesseract-ocr` + `chi_sim`（实测"设置 通用 音量"置信 96.6）；Windows 侧没装，那边会如实返回 `backend=none` 交给 vision。
+4. 记忆提炼的召回：现在能挖出候选（时间模式 + 话题模式），但"自动接受"这一步
+   仍要人点头；要不要让模型自己批，要看真实误报率。
+5. ~~core 覆盖率~~ ✅ 94% · ~~H 组体验项~~ ✅ · ~~记忆自动提炼~~ ✅ · ~~块级去重~~ ✅ · ~~心情写入~~ ✅ · ~~HTTP 事件流~~ ✅ · ~~身份锁/同话题~~ ✅ · ~~设备补齐~~ ✅ · ~~分级模型~~ ✅ · ~~旧账本~~ ✅

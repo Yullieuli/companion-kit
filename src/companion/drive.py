@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from typing import Any
 
@@ -49,6 +50,27 @@ def _pending_life(home: Home) -> int:
     return len(life_mod.unshared(home))
 
 
+def _pending_life_hint(home: Home) -> str:
+    """最近一件还没跟他讲过的事，一句话。
+
+    为什么要单独给一句：`pending_life` 那个**数字**以前会原样写进唤醒理由
+    ——「有 6 件生活里的事还没跟他说」。模型把理由当台词念，
+    开口就是「今天一口气刷了六条硬件评测」，还顺手把标题里的词缝成结论。
+    数字是打分用的，不该给模型看；给她一件具体的，她才讲得出内容。
+    """
+    from . import life as life_mod
+
+    try:
+        rows = life_mod.unshared(home)
+    except Exception:  # pragma: no cover - 生活流坏了不该拦住开场
+        return ""
+    for r in rows:
+        core = life_mod.core_title(r.get("title", ""))
+        if core:
+            return f"{life_mod._verb_for(r)}「{core}」"
+    return ""
+
+
 def _bili_state(home: Home, now: datetime) -> tuple[bool, str, int]:
     """B 站那边现在什么情况：(还有额度吗, 为什么没有, 有几条读完没分享)。
 
@@ -78,7 +100,7 @@ def _claim(home: Home, host: str, now: datetime) -> tuple[bool, str]:
     return True, host
 
 
-def tick(
+def _tick_unlocked(
     home: Home,
     *,
     host: str = "cli",
@@ -94,6 +116,17 @@ def tick(
 ) -> dict[str, Any]:
     now = now or datetime.now()
     home.init()
+
+    # 心跳先写：**不管这次能不能拿到时钟**，这个宿主都还活着。
+    # 写在这里（裁决之前）而不是后面，是为了让"被别的宿主占了时钟"的那一方
+    # 也能被看门狗看见——它活着，只是不当家而已。
+    from . import watchdog as wd_mod
+
+    wd_mod.beat(home, host=host, now=now)
+    home.append_jsonl("logs/heartbeats.jsonl",
+                       {"host": host, "pid": os.getpid(),
+                        "at": now.isoformat(timespec="seconds"),
+                        "epoch": now.timestamp()})
 
     ok, owner = _claim(home, host, now)
     if not ok:
@@ -140,7 +173,7 @@ def tick(
         days_since_voice=days_since_voice,
         remaining_cny=remaining,
         owner_waiting=owner_waiting,
-        extra={"feedback": fb},
+        extra={"feedback": fb, "pending_life_hint": _pending_life_hint(home)},
         bili_due=bili_ok,
         bili_why=bili_why,
     )
@@ -196,6 +229,12 @@ def tick(
     )
     home.save_json("mood/state.json", m)
 
+    # 她"打字"要多久：主动开口一般比回话长（她在组织语言）。
+    # 通道照这个数等一下再发，不要秒回。
+    from . import typing as typing_mod
+
+    typing_ms = typing_mod.delay_ms("主动开口", busy=True, now=now)
+
     return {
         **decision,
         "event": event,
@@ -204,4 +243,12 @@ def tick(
         "in_sleep": clock.in_sleep(rhythm, now),
         "in_window": clock.in_window(rhythm, now),
         "host": host,
+        "typing_ms": typing_ms,
+        "typing_seconds": round(typing_ms / 1000.0, 2),
     }
+
+
+def tick(home: Home, **kwargs: Any) -> dict[str, Any]:
+    """串行化时钟与额度的整个读—改—写事务。"""
+    with home.lock("store"):
+        return _tick_unlocked(home, **kwargs)

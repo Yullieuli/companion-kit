@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 from . import __version__
 from . import context as context_mod
-from . import ask as ask_mod, bili, cost, device, drive, events, fence, group, life, memory, mood as mood_mod, opinion, people, react as react_mod, sticker, voice
+from . import ask as ask_mod, bili, cost, device, distill as distill_mod, drive, events, fence, group, life, memory, mood as mood_mod, opinion, people, react as react_mod, resume as resume_mod, sticker, voice
 from .store import Home
 
 PROTOCOL = "2024-11-05"
@@ -41,9 +41,13 @@ def _schema(name: str, desc: str, props: dict[str, Any] | None = None, required:
 
 
 TOOLS: list[Tool] = [
-    _schema("companion_context", "拿到这一轮该注入的上下文（人格/状态/记忆/观点/人物卡/生活）。宿主每轮开头调一次。",
+    _schema("companion_context", "拿到这一轮该注入的上下文（人格/状态/记忆/观点/人物卡/生活）。宿主每轮开头调一次。"
+                                  "给了 session_id 就做增量投影：状态没变返回空文本，每 6 轮强制全量一次。",
             {"budget": {"type": "integer", "description": "字符预算，默认 2000", "default": 2000},
-             "query": {"type": "string", "description": "按这句话挑相关记忆与观点；不给就取最近的"}}),
+             "query": {"type": "string", "description": "按这句话挑相关记忆与观点；不给就取最近的"},
+             "session_id": {"type": "string", "description": "会话标识：给了就只返回变化的部分（省 token）"},
+             "full": {"type": "boolean", "description": "强制全量（默认 false）", "default": False},
+             "full_every": {"type": "integer", "description": "每几轮强制全量一次，默认 6", "default": 6}}),
     _schema("companion_react", "把这一轮的感受写回去：心情变化、关于他的事实、记忆、观点、生活事件。一轮结束时调一次。",
             {"mood_delta": {"type": "object", "description": "{satisfaction, closeness, energy}，单轴最多 ±12"},
              "why": {"type": "string", "description": "一句话说明为什么，会进 history"},
@@ -53,6 +57,9 @@ TOOLS: list[Tool] = [
              "opinion": {"type": "object", "description": "{claim, tags, confidence}；她自己的判断"},
              "life": {"type": "object", "description": "{title, kind, detail, tags, shared}；她生活里发生的事"},
              "said": {"type": "string", "description": "这一轮她说出口的话，用于回看与去重"},
+             "turn_id": {"type": "string", "description": "本轮唯一标识；同一 turn_id 重试不会重复改变心情/记忆/费用"},
+             "usage": {"type": "object",
+                       "description": "本轮真实模型用量 {model, fresh_tokens, cached_tokens, output_tokens}，会写入成本账本"},
              "context": {"type": "object",
                          "description": "这一轮 companion_context 的返回值（原样传回），用于回放测试"}}),
     _schema("companion_opinion", "她的判断清单：看、加一条、被验证了、被反驳了。",
@@ -105,10 +112,46 @@ TOOLS: list[Tool] = [
             {"path": {"type": "string"}, "mood": {"type": "string", "enum": sticker.MOODS},
              "tags": {"type": "array", "items": {"type": "string"}}}, ["path"]),
     _schema("companion_sticker_stats", "表情库统计（总数 / 各情绪张数）。"),
+    _schema("companion_sticker_mark_sent", "发完一张表情后调用一次：记一次发送。"
+                                            "不调用的话「一轮最多 3 张」的斗图上限不会生效。",
+            {"name": {"type": "string", "description": "刚发出去那张表情的名字（pick 返回的 name）"}},
+            ["name"]),
+    _schema("companion_sticker_extract", "自动把一张图收进表情库：认情绪、打标签。"
+                                           "情绪判定按「文件名关键词 > 像素颜色」的顺序。",
+            {"path": {"type": "string", "description": "图片路径"},
+             "mood": {"type": "string", "enum": sticker.MOODS},
+             "tags": {"type": "array", "items": {"type": "string"}}}, ["path"]),
+    _schema("companion_sticker_seed", "播种内置表情库（每个情绪两张）。库里空的时候先跑一次。",
+            {"force": {"type": "boolean", "default": False,
+                       "description": "true 会覆盖已存在的内置表情"}}),
+    _schema("companion_web_read", "把一个网页变成能进上下文的一段话：抽正文 + 摘要 + 缓存。"
+                                  "搜索由宿主做，这里只处理已经拿到的 HTML；"
+                                  "外部文本会自动过围栏消毒。",
+            {"url": {"type": "string"},
+             "html": {"type": "string", "description": "页面 HTML；不给就用缓存"},
+             "focus": {"type": "string", "description": "摘要聚焦什么"},
+             "max_chars": {"type": "integer", "default": 1200},
+             "ttl": {"type": "integer", "default": 600, "description": "缓存多久算新鲜（秒）"}},
+            ["url"]),
+    _schema("companion_web_pick", "从一批搜索结果里挑最相关的几页（标题命中权重更高）。",
+            {"pages": {"type": "array", "items": {"type": "object"},
+                       "description": "每项含 title / url / snippet"},
+             "query": {"type": "string"},
+             "top": {"type": "integer", "default": 3}}, ["pages"]),
     _schema("companion_person", "读或写人物卡。给了 fact 就是学一件关于他的事。",
             {"who": {"type": "string", "description": "owner 或名字"},
              "fact": {"type": "string"}, "relation": {"type": "string"},
              "closeness": {"type": "integer"}, "notes": {"type": "string"}}),
+    _schema("companion_resume", "断点续传：列出说了但没写回的轮次（进程崩在开口之后、写回之前）。",
+            {"action": {"type": "string", "enum": ["pending", "settle"], "default": "pending"},
+             "turn_id": {"type": "string", "description": "settle 时指定要销掉哪一轮"}}),
+    _schema("companion_distill", "记忆自动提炼：从生活流水与聊天里挖值得记住的模式。",
+            {"action": {"type": "string", "enum": ["review", "candidates", "accept"], "default": "review"},
+             "summary": {"type": "string", "description": "accept 时用：一句话说清这条记忆"},
+             "title": {"type": "string"}, "body": {"type": "string"},
+             "tags": {"type": "array", "items": {"type": "string"}}}),
+    _schema("companion_watchdog", "看门狗：宿主是不是还活着（心跳多久没更新、进程还在不在）。",
+            {"stale_minutes": {"type": "number", "description": "超过多少分钟没心跳算卡住", "default": 20}}),
     _schema("companion_cost", "今天花了多少 / 预算还剩多少；给 task 就返回这个任务该用哪个档的模型。",
             {"task": {"type": "string", "description": "bili_pick / bili_debrief / chat ..."}}),
     _schema("companion_voice", "合成一段语音（本地 TTS），返回文件路径。sing=true 是降级版「唱」。",
@@ -128,11 +171,13 @@ TOOLS: list[Tool] = [
              "force": {"type": "boolean"}}, []),
     _schema("device_look",
             "看屏幕：截图 + 前台/窗口信息。给了 window 就只抓那个窗口（被盖住也能抓）；"
-            "ocr=true 会先本地读图上的字（没装引擎时返回 backend=none，让视觉模型读图）。",
+            "ocr=true 会先本地读图上的字（没装引擎时返回 backend=none，让视觉模型读图）。"
+            "需要在 devices.json 里 enabled=true 且 mcp_owner=true 才可用。",
             {"target": {"type": "string", "enum": ["phone", "desktop", "browser", "game"], "default": "desktop"},
              "window": {"type": "string", "description": "窗口标题片段"},
              "ocr": {"type": "boolean", "default": False}}),
-    _schema("device_act", "在屏幕上做一个动作（点/滑动/打字/按键/切窗口），返回执行后的截图。危险动作会被拒。",
+    _schema("device_act", "在屏幕上做一个动作（点/滑动/打字/按键/切窗口），返回执行后的截图。危险动作会被拒。"
+                          "主人身份由 devices.json 的 mcp_owner 决定，参数里传什么都没用。",
             {"target": {"type": "string", "enum": ["phone", "desktop", "browser", "game"]},
              "action": {"type": "string", "enum": ["tap", "click", "swipe", "type", "key", "focus"]},
              "x": {"type": "integer"}, "y": {"type": "integer"},
@@ -141,7 +186,8 @@ TOOLS: list[Tool] = [
              "double": {"type": "boolean"}, "ask_id": {"type": "string"},
              "before": {"type": "boolean", "description": "动作前也截一张"}},
             ["target", "action"]),
-    _schema("device_open", "打开一个 App / 网址 / 程序（走白名单）。可能需要先请示（会返回 ask）。",
+    _schema("device_open", "打开一个 App / 网址 / 程序（走白名单）。可能需要先请示（会返回 ask）。"
+                           "主人身份由 devices.json 的 mcp_owner 决定，参数里传什么都没用。",
             {"target": {"type": "string", "enum": ["phone", "desktop", "browser", "game"]},
              "what": {"type": "string"}, "ask_id": {"type": "string"}}, ["target", "what"]),
 ]
@@ -158,7 +204,25 @@ def _t_context(home: Home, a: dict[str, Any]) -> dict[str, Any]:
         budget=int(a.get("budget") or 2000),
         query=a.get("query") or "",
     )
-    return ctx.as_dict()
+    out = ctx.as_dict()
+    session = str(a.get("session_id") or "").strip()
+    if not session:
+        return out
+    # 带 session_id：做增量投影。状态没变就返回空文本，宿主这一轮不用注入。
+    proj = context_mod.project(
+        home, session, ctx,
+        full_every=int(a.get("full_every") or context_mod.FULL_EVERY),
+        force=bool(a.get("full")),
+    )
+    out["text"] = proj.text
+    out["total_chars"] = len(proj.text)
+    out["full"] = proj.full
+    out["changed"] = proj.changed
+    out["dropped"] = proj.dropped
+    out["rounds"] = proj.rounds
+    out["reason"] = proj.reason
+    out["session_id"] = session
+    return out
 
 
 def _t_react(home: Home, a: dict[str, Any]) -> dict[str, Any]:
@@ -172,6 +236,8 @@ def _t_react(home: Home, a: dict[str, Any]) -> dict[str, Any]:
         opinion_item=a.get("opinion") or None,
         life_event=a.get("life") or None,
         said=a.get("said") or "",
+        usage=a.get("usage") or None,
+        turn_id=a.get("turn_id") or "",
         context=a.get("context") or None,
     )
 
@@ -301,6 +367,69 @@ def _t_sticker_stats(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, **sticker.stats(home)}
 
 
+def _t_sticker_mark_sent(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    """宿主发完图必须调一次：不记的话斗图上限永远不生效。"""
+    ok = sticker.mark_sent(home, str(a.get("name") or ""))
+    if not ok:
+        return {"ok": False, "error": "库里没有这张表情"}
+    return {"ok": True, **sticker.stats(home)}
+
+
+def _t_sticker_extract(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    """自动收一张图进表情库：认情绪、打标签。
+
+    情绪判定顺序：文件名关键词 > 像素颜色 > 默认。
+    关键词最准（主人自己命名的），像素只是兜底。
+    """
+    from . import stickerlib
+
+    path = str(a.get("path") or "")
+    if not path:
+        return {"ok": False, "error": "要给一个图片路径"}
+    try:
+        out = stickerlib.extract(home, path, mood=a.get("mood") or "",
+                                 tags=a.get("tags") or [])
+    except FileNotFoundError:
+        return {"ok": False, "error": f"找不到文件：{path}"}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, **out}
+
+
+def _t_sticker_seed(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    """播种内置表情（空库起步时她一张都发不出去）。"""
+    from . import stickerlib
+
+    return {"ok": True, **stickerlib.seed_builtin(home, force=bool(a.get("force")))}
+
+
+def _t_web_read(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    """把一个网页变成能进上下文的一段话：查缓存 → 抽正文 → 摘要 → 存缓存。
+
+    外部文本会先过 fence 消毒 —— 网页内容可能是提示词注入。
+    """
+    from . import webpage
+
+    url = str(a.get("url") or "")
+    html = str(a.get("html") or "")
+    out = webpage.read_page(home, url, html,
+                            ttl=int(a.get("ttl") or webpage.DEFAULT_TTL),
+                            max_chars=int(a.get("max_chars") or webpage.DEFAULT_MAX_CHARS),
+                            focus=str(a.get("focus") or ""))
+    return out
+
+
+def _t_web_pick(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    """从一批搜索结果里挑最相关的几页。搜索本身由宿主做，这里只挑。"""
+    from . import webpage
+
+    pages = a.get("pages")
+    if not isinstance(pages, list):
+        return {"ok": False, "error": "pages 得是数组"}
+    picked = webpage.pick_pages(pages, str(a.get("query") or ""), top=int(a.get("top") or 3))
+    return {"ok": True, "pages": picked, "query": str(a.get("query") or "")}
+
+
 def _t_person(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     who = a.get("who") or people.OWNER
     if a.get("fact"):
@@ -312,6 +441,42 @@ def _t_person(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     if not p:
         return {"ok": False, "error": f"没有这个人的卡：{who}"}
     return {"ok": True, "person": p.as_dict(), "card": people.render(home, who)}
+
+
+def _t_resume(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    action = a.get("action") or "pending"
+    if action == "settle":
+        ok = resume_mod.settle(home, str(a.get("turn_id") or ""))
+        return {"ok": ok, "turn_id": a.get("turn_id") or ""}
+    rows = resume_mod.pending(home)
+    return {"ok": True, "pending": len(rows), "turns": rows}
+
+
+def _t_distill(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    action = a.get("action") or "review"
+    if action == "candidates":
+        return {"ok": True, "candidates": distill_mod.candidates(home)}
+    if action == "accept":
+        summary = str(a.get("summary") or "").strip()
+        if not summary:
+            return {"ok": False, "error": "要 summary（一句话说清这条记忆）"}
+        try:
+            page = distill_mod.accept(home, summary, title=str(a.get("title") or ""),
+                                      body=str(a.get("body") or ""),
+                                      tags=list(a.get("tags") or []) or None)
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": True, **page}
+    return {"ok": True, "text": distill_mod.review(home)}
+
+
+def _t_watchdog(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    from . import watchdog as wd_mod
+
+    stale = float(a.get("stale_minutes") or 20)
+    out = wd_mod.check(home, stale_minutes=stale)
+    out["hosts"] = wd_mod.stale_hosts(home, stale_minutes=stale)
+    return out
 
 
 def _t_cost(home: Home, a: dict[str, Any]) -> dict[str, Any]:
@@ -329,10 +494,17 @@ def _t_voice(home: Home, a: dict[str, Any]) -> dict[str, Any]:
 
 def _t_ask(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     action = a.get("action") or "list"
-    if action == "allow":
-        return ask_mod.decide(home, str(a.get("id") or ""), True)
-    if action == "deny":
-        return ask_mod.decide(home, str(a.get("id") or ""), False)
+    if action in ("allow", "deny"):
+        # ⚠️ 这是模型自己点的头，不是主人的话。
+        # 所以 by="model" —— 这张票能记录、能查，但**开不了设备**
+        # （device 闸只认 can_act 的票）。主人真的同意的话，
+        # 走聊天里的 `companion ask reply` 或本机 CLI，那才是主人在场。
+        out = ask_mod.decide(home, str(a.get("id") or ""), action == "allow", by="model")
+        if out.get("ok"):
+            out["note"] = ("这条记下了，但它是模型自己批准的，不能用来开设备。"
+                           "要主人真的同意，请让他在对话里回复，或本机执行 "
+                           f"`companion ask allow {a.get('id') or ''}`")
+        return out
     return {"ok": True, "pending": ask_mod.pending(home), "recent": ask_mod.list_all(home, limit=10)}
 
 
@@ -360,9 +532,18 @@ def _t_bili(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     return {"ok": False, "why": f"不认识的动作 {action}"}
 
 
+def _mcp_is_owner(home: Home) -> bool:
+    """MCP 会话是不是主人。只信 devices.json 里的 mcp_owner（人手写的），
+    不信模型在工具参数里传的任何布尔值——那是模型的话，不是主人的话。"""
+    return bool(device.config(home).get("mcp_owner"))
+
+
 def _t_look(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     target = a.get("target") or "desktop"
     window = a.get("window") or ""
+    v = device.check(home, target=target, action="look", is_owner=_mcp_is_owner(home))
+    if not v.ok:
+        return {"ok": False, "error": v.reason}
     if a.get("ocr"):
         return device.observe(home, target, window=window, ocr=True)
     return device.look(home, target, window=window)
@@ -371,13 +552,13 @@ def _t_look(home: Home, a: dict[str, Any]) -> dict[str, Any]:
 def _t_act(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     args = {k: a[k] for k in ("x", "y", "x2", "y2", "text", "key", "window", "double") if k in a}
     return device.act(home, a["target"], a["action"], args,
-                      is_owner=bool(a.get("is_owner", True)), ask_id=a.get("ask_id") or "",
+                      is_owner=_mcp_is_owner(home), ask_id=a.get("ask_id") or "",
                       before=bool(a.get("before")))
 
 
 def _t_open(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     return device.open_thing(home, a["target"], a["what"],
-                             is_owner=bool(a.get("is_owner", True)), ask_id=a.get("ask_id") or "")
+                             is_owner=_mcp_is_owner(home), ask_id=a.get("ask_id") or "")
 
 
 HANDLERS: dict[str, Callable[[Home, dict[str, Any]], dict[str, Any]]] = {
@@ -399,8 +580,16 @@ HANDLERS: dict[str, Callable[[Home, dict[str, Any]], dict[str, Any]]] = {
     "companion_sticker_pick": _t_sticker_pick,
     "companion_sticker_add": _t_sticker_add,
     "companion_sticker_stats": _t_sticker_stats,
+    "companion_sticker_mark_sent": _t_sticker_mark_sent,
+    "companion_sticker_extract": _t_sticker_extract,
+    "companion_sticker_seed": _t_sticker_seed,
+    "companion_web_read": _t_web_read,
+    "companion_web_pick": _t_web_pick,
     "companion_person": _t_person,
     "companion_cost": _t_cost,
+    "companion_resume": _t_resume,
+    "companion_distill": _t_distill,
+    "companion_watchdog": _t_watchdog,
     "companion_voice": _t_voice,
     "companion_bili": _t_bili,
     "companion_ask": _t_ask,

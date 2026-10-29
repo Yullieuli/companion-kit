@@ -1,0 +1,40 @@
+# companion-kit 本地编排：core + 只读事件流 + 持久化 store。
+#
+#   docker compose up -d          起服务
+#   docker compose exec companion companion doctor
+#   docker compose exec companion companion tick
+#   docker compose logs -f
+#
+# 边界（与 README 平台矩阵一致）：
+#   · 桌面控制：容器里没有显示，device_* 一律被拒
+#   · 语音：镜像里没有 TTS 引擎，companion_voice 会如实返回不可用
+#   · 手机：需要 --device 映射 USB 或用网络 adb
+#   · 浏览器 CDP：要连宿主 Chrome，填 devices.json 的 windows/浏览器配置
+services:
+  companion:
+    build:
+      context: .
+      args:
+        # 国内网络可换成镜像源：COMPANION_BASE=m.daocloud.io/docker.io/library/python:3.12-slim
+        BASE: ${COMPANION_BASE:-python:3.12-slim}
+    image: companion-kit:local
+    container_name: companion-kit
+    restart: unless-stopped
+    environment:
+      COMPANION_HOME: /data
+      TZ: Asia/Shanghai
+    volumes:
+      # store 必须挂卷：重建容器不能丢记忆
+      - companion-data:/data
+    ports:
+      # 只读事件流 / context；只绑回环，不要直接暴露到公网
+      - "127.0.0.1:7788:7788"
+    command: ["serve", "--host", "0.0.0.0", "--port", "7788"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import companion"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  companion-data:

@@ -47,8 +47,13 @@ LOG = "logs/device.jsonl"
 STATE = "devices.json"
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "enabled": True,
+    "enabled": False,
     "owner_only": True,
+    # MCP 会话默认不算主人：openclaw / codex 这些宿主连进来的调用者身份未知，
+    # 模型传什么布尔值都不算数。只有主人自己在 devices.json 里把这项改成
+    # true（表示"这个 MCP 服务是我亲手配给她的"），设备闸才按主人会话放行。
+    # CLI 是本机手敲的，不受这项影响。
+    "mcp_owner": False,
     "allow": {
         "phone": {"packages": []},
         "desktop": {"windows": []},
@@ -93,6 +98,11 @@ def config(home: Home) -> dict[str, Any]:
         return json.loads(json.dumps(DEFAULT_CONFIG))
     out = json.loads(json.dumps(DEFAULT_CONFIG))
     out.update({k: v for k, v in d.items() if k in DEFAULT_CONFIG})
+    allow = d.get("allow") or {}
+    out["allow"] = {
+        target: {**defaults, **(allow.get(target) or {})}
+        for target, defaults in DEFAULT_CONFIG["allow"].items()
+    }
     out["ask"] = {**DEFAULT_CONFIG["ask"], **(d.get("ask") or {})}
     out["ocr"] = {**DEFAULT_CONFIG["ocr"], **(d.get("ocr") or {})}
     out["windows"] = {**DEFAULT_CONFIG["windows"], **(d.get("windows") or {})}
@@ -141,7 +151,7 @@ def check(
     args = args or {}
     now = now or time.time()
 
-    if not cfg.get("enabled", True):
+    if not cfg.get("enabled", False):
         return Verdict(False, "设备控制没开（devices.json: enabled=false）")
     if cfg.get("owner_only", True) and not is_owner:
         return Verdict(False, "只在主人会话里能动手；群聊/陌生人一律不触发")
@@ -152,22 +162,26 @@ def check(
             return Verdict(False, f"危险动作被拒：出现「{w}」。这类事必须本人亲手做")
 
     allow = (cfg.get("allow") or {}).get(target) or {}
-    keys = {"open": ("packages", "windows", "domains"),
-            "launch": ("packages", "windows", "domains"),
-            "focus": ("windows",)}.get(action, ())
-    for k in keys:
-        listed = [str(x).lower() for x in (allow.get(k) or [])]
+    action_name = _norm(action)
+    key = ""
+    if action_name in ("open", "launch"):
+        key = {"phone": "packages", "desktop": "windows",
+               "browser": "domains", "game": "windows"}.get(target, "")
+    elif action_name == "focus":
+        key = "windows"
+    if key:
+        listed = [_norm(str(x)) for x in (allow.get(key) or []) if _norm(str(x))]
         if not listed:
-            continue
+            return Verdict(False, f"白名单为空，拒绝{action_name}（先配置 devices.json 的 allow.{target}.{key}）")
         want = ""
-        if k == "packages":
-            want = _norm(args.get("package", ""))
-        elif k == "windows":
+        if key == "packages":
+            want = _norm(args.get("package") or args.get("what") or "")
+        elif key == "windows":
             want = _norm(args.get("window") or args.get("app") or args.get("what") or "")
-        elif k == "domains":
+        elif key == "domains":
             want = _norm(args.get("url") or args.get("what") or "")
-        if want and not any(x in want for x in listed):
-            return Verdict(False, f"不在白名单里：{want}（devices.json 的 allow.{target}.{k}）")
+        if not want or not any(x in want for x in listed):
+            return Verdict(False, f"不在白名单里：{want or '（空目标）'}（devices.json 的 allow.{target}.{key}）")
 
     st = _state(home)
     key = hashlib.sha1(f"{target}|{action}|{json.dumps(args, sort_keys=True, ensure_ascii=False)}".encode()).hexdigest()[:16]

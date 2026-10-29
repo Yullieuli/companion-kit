@@ -142,9 +142,25 @@ class DeltaInjectTest(unittest.TestCase):
         hook._render_delta(self.home, "s1", a)
         b = self._ctx("【现在】周三 17:57\n【状态】在", "【你最近在做的事】\n- 20:31 看了《影之刃零》")
         out = hook._render_delta(self.home, "s1", b)
-        self.assertTrue(out.startswith("【状态更新】"))
         self.assertIn("影之刃零", out)
         self.assertNotIn("【状态】在", out)          # 没变的块不重发
+
+    def test_sticky_blocks_always_sent(self):
+        """常驻块（人格/生活）每轮都发 —— 模型不会跨轮记住注入内容。
+
+        2026-10-29 主人一眼看出来的：她连自己刚看过三条显卡评测都不知道，
+        因为第二轮投影判定"没变"就一个字都没注入。
+        """
+        def ctx_with_sticky():
+            from companion import context as ctx_mod
+
+            return ctx_mod.Context(
+                text="人格", blocks=[ctx_mod.Block("soul", "人格", 10, sticky=True)])
+
+        first = hook._render_delta(self.home, "s2", ctx_with_sticky())
+        self.assertEqual(first, "人格")
+        second = hook._render_delta(self.home, "s2", ctx_with_sticky())
+        self.assertEqual(second, "人格", "没变也得发，否则她就忘了自己是谁")
 
     def test_full_refresh_every_n_turns(self):
         ctx = self._ctx("【现在】周三 17:57\n【状态】在")

@@ -4,21 +4,69 @@
 
 | 脚本 | 作用 | 风险 |
 |---|---|---|
-| `companion_hook.py` | `pre_llm_call` 注入：人格 / 心情 / 额度 / 作息 / 观点 / 生活 | 低：与现有 `said.py` 并存，内容不重叠，坏了只是少一段上下文 |
+| `companion_hook.py` | `pre_llm_call` 注入：人格 / 心情 / 额度 / 作息 / 观点 / 生活 / 待你点头的事 | 低：与现有 `said.py` 并存，内容不重叠，坏了只是少一段上下文 |
 | `companion_wake.py` | 替换"该不该叫醒她"的判断，设成 cron 的 `monitor_script` | 中：要停掉 `pulse.py` 的骰子和三个固定自由时间 |
+| `companion_gate.py` | **发送前闸**：拦住改名与同话题重复（回复模式不吃额度闸） | 低：闸异常时放行并留痕，不会把对话搞挂 |
+| `patch_napcat_guard.py` | 把闸插进 napcat 的 `send()`（幂等 / 自动备份 / `--revert` 可回滚） | 中：改宿主文件，默认 dry-run，`--apply` 才落盘 |
+
+## 第三步：发送前闸（把"说出去之前"变成可判定）
+
+hermes 的钩子只有 `pre_llm_call`（注入）与 `pre_verify`（要求继续），**拦不住已经生成的最终回复**。
+真正的拦截点是渠道的发送函数 —— napcat 的 `send()` 是所有出站文本的单一漏斗。
+
+```bash
+# 预览要改什么（不改文件）
+python3 ~/.hermes/scripts/patch_napcat_guard.py --dry-run
+
+# 真插（自动备份 .bak-gate-时间戳）
+python3 ~/.hermes/scripts/patch_napcat_guard.py
+
+# 撤销
+python3 ~/.hermes/scripts/patch_napcat_guard.py --revert
+```
+
+插进去的闸调 `companion_gate.py`：
+
+| 模式 | 判定 | 用途 |
+|---|---|---|
+| `reply`（默认） | 身份锁 + 同话题 10 分钟不追问 | 回复主人。**不看额度**：回复不占主动开口额度 |
+| `active` | 上面两项 + 额度/间隔 | 主动开口前预检 |
+
+自己也能测：
+
+```bash
+echo '{"text": "以后叫我小璃吧"}' | ~/.hermes/scripts/companion_gate.py
+# → {"ok": false, "blocked": "identity", ...}   退出码 1
+echo '{"text": "在吗"}' | ~/.hermes/scripts/companion_gate.py
+# → {"ok": true, ...}                             退出码 0
+```
+
+## 第四步：请示单要有人看
+
+她动手前会问一声（`companion ask`）。没有人呈现就等于没问过：
+
+- **hermes**：钩子会把「等你点头」摆进注入上下文，主人聊天时就能看见。
+- **DSH**：适配器会检测待办并投递给主人会话（同一件事不会反复催）。
+
+主人答应了要回填：
+
+```bash
+companion ask list              # 看还等哪些
+companion ask allow <ask_id>    # 答应
+companion ask deny  <ask_id>    # 拒绝
+```
 
 ## 前置（已验证）
-
 ```bash
 # WSL 里装一份，但和 Windows 共用同一份 store
 python3 -m venv ~/.companion-venv
 ~/.companion-venv/bin/python -m pip install --no-compile <whl>
-export COMPANION_HOME=/mnt/c/Users/Anran/.companion
+export COMPANION_HOME=/mnt/c/Users/you/.companion
 ~/.companion-venv/bin/python -m companion status     # 能看到 Windows 那边的 quota
 ```
 
 WSL 连不上 GitHub（实测超时），所以 whl 先下到 Windows 再从这个路径装：
-`/mnt/c/Users/Anran/AppData/Local/Temp/companion_kit-*.whl`
+`/mnt/c/Users/you/AppData/Local/Temp/companion_kit-*.whl`
 
 ## 第一步：注入（可单独上）
 
@@ -26,7 +74,7 @@ WSL 连不上 GitHub（实测超时），所以 whl 先下到 Windows 再从这�
 
 ```bash
 echo '{"session_id":"t","platform":"napcat","user_message":"在吗"}' \
-  | COMPANION_HOME=/mnt/c/Users/Anran/.companion \
+  | COMPANION_HOME=/mnt/c/Users/you/.companion \
     ~/.companion-venv/bin/python companion_hook.py
 ```
 
@@ -35,9 +83,9 @@ echo '{"session_id":"t","platform":"napcat","user_message":"在吗"}' \
 ```yaml
 hooks:
   pre_llm_call:
-    - command: "/usr/bin/python3 /home/anran/.hermes/scripts/said.py hook-pre"
+    - command: "/usr/bin/python3 /home/you/.hermes/scripts/said.py hook-pre"
       timeout: 10
-    - command: "COMPANION_HOME=/mnt/c/Users/Anran/.companion /home/anran/.companion-venv/bin/python /home/anran/.hermes/scripts/companion_hook.py"
+    - command: "COMPANION_HOME=/mnt/c/Users/you/.companion /home/you/.companion-venv/bin/python /home/you/.hermes/scripts/companion_hook.py"
       timeout: 10
 ```
 
@@ -77,7 +125,7 @@ SOUL 还是模板时会整段不注入（避免把占位符塞进她的提示词
 测：
 
 ```bash
-COMPANION_HOME=/mnt/c/Users/Anran/.companion \
+COMPANION_HOME=/mnt/c/Users/you/.companion \
   ~/.companion-venv/bin/python companion_wake.py --dry-run --json
 ```
 

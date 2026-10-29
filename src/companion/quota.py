@@ -67,11 +67,16 @@ def allow(
     cfg: dict[str, Any] | None,
     now: datetime | None = None,
     owner_last_seen: float | None = None,
+    reserved: bool = False,
 ) -> tuple[bool, str]:
     """能不能主动开口。第二项是理由（不能时说明为什么）。"""
     now = now or datetime.now()
     c = {**DEFAULTS, **(cfg or {})}
     st = _roll(state, now)
+    # drive 已经为这张有效票做过完整的额度判定并预扣一次。
+    # 不能因为它刚写入 last_at/count，又在真正开口时把同一次拒绝或再扣一遍。
+    if reserved:
+        return True, ""
     cap = cap_for(c, owner_last_seen, now)
     if cap <= 0:
         return False, "主人已经很久没回应了，今天不主动（日记照写）"

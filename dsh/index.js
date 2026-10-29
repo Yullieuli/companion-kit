@@ -38,6 +38,50 @@ function sessionFile() {
   return path.join(home(), 'dsh.json')
 }
 
+function cursorFile() {
+  return path.join(home(), 'dsh.cursor')
+}
+
+/** 已经报过的请示单：同一条不要反复催主人。 */
+function askedFile() {
+  return path.join(home(), 'dsh.asked.json')
+}
+
+function loadAsked() {
+  try {
+    const d = JSON.parse(fs.readFileSync(askedFile(), 'utf8'))
+    return d && typeof d === 'object' ? d : {}
+  } catch { return {} }
+}
+
+function saveAsked(data) {
+  try {
+    fs.mkdirSync(home(), { recursive: true })
+    fs.writeFileSync(askedFile(), JSON.stringify(data), 'utf8')
+  } catch {}
+}
+
+function loadCursor() {
+  try {
+    const value = Number(fs.readFileSync(cursorFile(), 'utf8').trim())
+    return Number.isSafeInteger(value) && value >= 0 ? value : 0
+  } catch { return 0 }
+}
+
+function saveCursor(value) {
+  fs.mkdirSync(home(), { recursive: true })
+  fs.writeFileSync(cursorFile(), String(value) + '\n', 'utf8')
+}
+
+/** 还没报给主人的请示单。报过的不再重复催。 */
+async function pendingAsks() {
+  const r = await runJson(['ask', 'list'])
+  if (!r.ok) return []
+  const pending = (r.data && r.data.pending) || []
+  const asked = loadAsked()
+  return pending.filter((p) => p && p.id && !asked[p.id])
+}
+
 /** 读/写"钉住的会话"。比环境变量好：改完不用重启 DSH。 */
 function pinnedSession() {
   try {
@@ -157,6 +201,36 @@ async function resolveSession(controller) {
   }
 }
 
+/** 取这次投递要注入的上下文。
+ *
+ * 用 core 的 session 级增量投影：状态没变就返回空串，这一轮什么都不用注入。
+ * 不用投影的话，每 5 分钟的 tick 都会把整个人格重新塞一遍，白烧 token；
+ * 用了投影之后只有"她真的变了"的部分才进上下文。
+ */
+async function projectedContext(sessionId) {
+  const args = ['context', '--budget', '1600']
+  if (sessionId) args.push('--session', String(sessionId))
+  const r = await runJson(args)
+  if (!r.ok || !r.data) return ''
+  const d = r.data
+  // 带 session 时 text 是投影后的增量；不带时是全量
+  const text = String(d.text || '')
+  return text
+}
+
+/** 把上下文和念头拼成一条消息。
+ *
+ * 顺序有讲究：上下文在前，念头在后。她先"想起自己是谁"，再"想说什么"，
+ * 反过来读着像系统提示。
+ */
+function composeMessage(contextText, thoughtText) {
+  const t = String(contextText || '').trim()
+  const think = String(thoughtText || '').trim()
+  if (!t) return think
+  if (!think) return t
+  return t + '\n\n' + think
+}
+
 /** 投递一条"她自己的念头"。
  *
  * 为什么不用 controller.prompt：那个接口把消息标成 source.kind='user'，
@@ -242,7 +316,8 @@ export default {
     let busy = false
     // ⚠️ 游标必须放本地。挂在 ctx 上会在严格代理下抛
     //    "cannot get property _cursor without inject"，异常又被 setInterval 的 catch 吞掉。
-    let cursor = 0
+    // 文件让重启后的实例从已交付位置继续；只在投递成功后更新。
+    let cursor = loadCursor()
     const log = (msg) => {
       try { console.log('[dsh-companion] ' + msg) } catch {}
     }
@@ -252,7 +327,7 @@ export default {
       if (stopped || busy) return
       busy = true
       try {
-        const tick = await runJson(['tick'])
+        const tick = await runJson(['tick', '--host', 'dsh'])
         if (!tick.ok) {
           log('tick 失败：' + (tick.error || '未知'))
           return
@@ -260,8 +335,47 @@ export default {
         const ev = await runJson(['events', '--since', String(cursor)])
         if (!ev.ok) return
         const rows = (ev.data && ev.data.events) || []
-        cursor = (ev.data && ev.data.cursor) || cursor
+        const nextCursor = ev.data && Number.isSafeInteger(ev.data.cursor) && ev.data.cursor >= 0
+          ? ev.data.cursor
+          : cursor
         const wake = rows.filter((e) => e && e.kind === 'wake_due')
+        const bili = rows.filter((e) => e && e.kind === 'bili_due')
+
+        // ① 她自己过日子：去刷会儿片。core 那边有额度与风控，失败就安静。
+        if (bili.length) {
+          const r = await runJson(['bili', 'tick'])
+          if (r.ok && r.data && r.data.ok) {
+            const title = r.data.title || r.data.bvid || ''
+            log('刷片完成：' + String(title).slice(0, 40))
+          } else {
+            log('刷片没成：' + ((r.error || (r.data && r.data.why)) || '未知'))
+          }
+        }
+
+        // ② 她在等主人点头的事：没人呈现就等于没问过。一次报一条。
+        const todo = await pendingAsks()
+        if (todo.length) {
+          const controller0 = ctx.get ? ctx.get('sessionController') : ctx.sessionController
+          const target0 = await resolveSession(controller0)
+          if (target0 && controller0) {
+            const item = todo[0]
+            // ask 记录的 say 本身就是完整问句（"我想电脑上打开chrome，可以吗？"），
+            // 不要再套一层"我想"，否则读起来像结巴。
+            const thought = `${item.say || item.action || '我想动一下'}（等你点个头，答应了我才能动手）`
+            // 请示也要带上下文：她得知道自己在跟谁说、现在什么状态。
+            const ctxText = await projectedContext(target0)
+            const text = composeMessage(ctxText, thought)
+            const r0 = await deliver(controller0, target0, text)
+            logDelivery(home(), { at: new Date().toISOString(), action: 'ask', session: target0,
+              ok: r0.ok, channel: r0.channel, error: r0.error })
+            if (r0.ok) {
+              const asked = loadAsked()
+              asked[item.id] = new Date().toISOString()
+              saveAsked(asked)
+            }
+          }
+        }
+
         if (!wake.length) return
 
         const e = wake[wake.length - 1]
@@ -274,7 +388,7 @@ export default {
         if (e.mood) bits.push(`心情${e.mood}`)
         if (e.quota) bits.push(`今天第 ${e.quota} 次开口`)
         const ctxLine = bits.length ? `（${bits.join('，')}）` : ''
-        const text = `现在 ${hhmm}。${e.reason || '有点想找他说话'}。${ctxLine}`
+        const thought = `现在 ${hhmm}。${e.reason || '有点想找他说话'}。${ctxLine}`
         const controller = ctx.get ? ctx.get('sessionController') : ctx.sessionController
         if (!controller ||
             (typeof controller.prompt !== 'function' && typeof controller.resolveAgent !== 'function')) {
@@ -286,13 +400,23 @@ export default {
           log('没有可投递的会话（list() 空）→ 跳过；可用 COMPANION_DSH_SESSION 指定')
           return
         }
+        // 增量上下文：状态没变就是空串，等于这一轮不重复注入。
+        const contextText = await projectedContext(target)
+        const text = composeMessage(contextText, thought)
         const r = await deliver(controller, target, text)
         logDelivery(home(), {
           at: new Date().toISOString(), action: e.action, session: target,
           ok: r.ok, channel: r.channel, error: r.error,
         })
-        if (r.ok) log(`投递 wake_due：${e.action} → ${target}（${r.channel}）`)
-        else log(`投递失败（sessionId=${target}）：${r.error}`)
+        if (r.ok) {
+          try {
+            saveCursor(nextCursor)
+            cursor = nextCursor
+          } catch (e) {
+            log('保存事件 cursor 失败：' + String((e && e.message) || e))
+          }
+          log(`投递 wake_due：${e.action} → ${target}（${r.channel}）`)
+        } else log(`投递失败（sessionId=${target}）：${r.error}`)
       } finally {
         busy = false
       }
@@ -324,8 +448,14 @@ export default {
           }
         },
       }))
-      reg('/dsh-companion/context', async () => {
-        const r = await runJson(['context', '--budget', '1600'])
+      reg('/dsh-companion/context', async (req) => {
+        // 带 session 就是增量投影：状态没变返回空文本，这一轮不用注入。
+        // 不带 session 就是全量——老调用方不受影响。
+        const q = (req && req.url) ? new URL(req.url, 'http://localhost').searchParams : null
+        const session = q ? (q.get('session') || '') : ''
+        const args = ['context', '--budget', '1600']
+        if (session) args.push('--session', session)
+        const r = await runJson(args)
         return r.ok ? r.data : r
       })
       reg('/dsh-companion/ping', async (req) => {
@@ -394,6 +524,20 @@ export default {
         // 只读：不能在这里调 tick，否则"看一眼"就扣一次开口额度
         const [st, c] = await Promise.all([runJson(['status']), runJson(['cost'])])
         return { status: st.ok ? st.data : st, cost: c.ok ? c.data : c, home: home() }
+      })
+      reg('/dsh-companion/react', async (req) => {
+        // 写回这一轮：said / mood_delta / turn_id / usage 都由宿主给。
+        // turn_id 幂等：同一个 turn 写两次不会重复改状态或重复计费。
+        const q = (req && req.url) ? new URL(req.url, 'http://localhost').searchParams : null
+        const args = ['react', '--json']
+        const said = q ? (q.get('said') || '') : ''
+        const turnId = q ? (q.get('turn_id') || '') : ''
+        const mood = q ? (q.get('satisfaction') || '') : ''
+        if (said) args.push('--said', said)
+        if (turnId) args.push('--turn-id', turnId)
+        if (mood) args.push('--mood', 'satisfaction=' + String(Number(mood)))
+        const r = await runJson(args)
+        return r.ok ? r.data : r
       })
     }
 

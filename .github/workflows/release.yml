@@ -1,0 +1,92 @@
+name: release
+
+# 为什么要有这个 job：
+# install.sh / install.ps1 拉的是 `releases/download/v<ver>/companion_kit-<ver>-py3-none-any.whl`。
+# 没有 Release 附件时这条命令 404，然后回退到 `git+`——而 git 回退装的是
+# 仓库当时的 main，不是打 tag 的那一版。用户会拿到一个"版本号写着 0.3.0、
+# 代码其实是半年前"的包，而且没有任何报错。
+#
+# 所以：打 tag 就等于发布，wheel 必须由 CI 构建并挂上去，不靠人手传。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的 tag（例如 v0.3.0）"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 版本一致性守门
+        # tag、pyproject、install.sh、install.ps1、package.json 五处必须同一版本。
+        # 不一致就停在这里，不要发出一个"装上去对不上"的 Release。
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, re, sys
+          tag = os.environ.get("GITHUB_REF_NAME") or ""
+          if not tag.startswith("v"):
+              tag = "v" + (os.environ.get("INPUT_TAG") or "").lstrip("v")
+          want = tag.lstrip("v")
+          root = pathlib.Path(".")
+          pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+          code_ver = re.search(r'^version\s*=\s*"([^"]+)"', pyproject, re.M).group(1)
+          sh = (root / "install.sh").read_text(encoding="utf-8")
+          sh_ver = re.search(r'VERSION="\$\{COMPANION_VERSION:-([0-9.]+)\}"', sh).group(1)
+          ps = (root / "install.ps1").read_text(encoding="utf-8")
+          ps_ver = re.search(r'\$Ver\s*=\s*if\s*\(\$env:COMPANION_VERSION\)\s*\{\s*"v"\s*\+\s*\$env:COMPANION_VERSION\s*\}\s*else\s*\{\s*"v([0-9.]+)"\s*\}', ps)
+          ps_ver = ps_ver.group(1) if ps_ver else ""
+          pkg = json.loads((root / "package.json").read_text(encoding="utf-8"))["version"]
+          found = {"pyproject": code_ver, "install.sh": sh_ver, "install.ps1": ps_ver, "package.json": pkg, "tag": want}
+          bad = {k: v for k, v in found.items() if v != want}
+          print("版本：", found)
+          if bad:
+              print("版本不一致，停止发布：", bad, file=sys.stderr)
+              raise SystemExit(1)
+          PY
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+
+      - name: 全量单测
+        run: |
+          python -m pip install -e .
+          python -m unittest discover -s tests
+
+      - name: 构建 wheel
+        run: |
+          python -m pip install build
+          python -m build --wheel --outdir dist
+
+      - name: 干净 venv 冒烟
+        # Release 发出去之后才发现在干净环境装不上，是最难看的失败。
+        run: |
+          python -m venv /tmp/rel-venv
+          /tmp/rel-venv/bin/pip install --quiet dist/*.whl
+          /tmp/rel-venv/bin/companion --home /tmp/rel-home init
+          /tmp/rel-venv/bin/companion --home /tmp/rel-home context --budget 300
+          # wheel 必须自带 hermes 适配层，否则 connect hermes 在 pip 安装下失效
+          /tmp/rel-venv/bin/python -c "from companion.connect import _bundled_hermes_dir; assert _bundled_hermes_dir(), 'wheel 里没有 hermes 适配层'"
+
+      - name: 发布
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          generate_release_notes: true
+          files: |
+            dist/*.whl
+            install.sh
+            install.ps1

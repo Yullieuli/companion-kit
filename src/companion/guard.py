@@ -20,7 +20,12 @@ from . import quota as quota_mod
 from .life import _lcs  # 同一个"像不像"的度量，省得两处各写一份
 from .store import Home
 
-TOPIC_MINUTES = 10
+# 45 分钟：原来定 10 分钟，只管得住"连着两轮说同一句"。
+# 2026-10-29 18:04 真机：主人只发了 3 个字，她把 **32 分钟前**说过的
+# 「行，"应该是的"…给图起个名字，给它们排个队」一字不差又发了一遍 ——
+# 10 分钟窗口早过了，"别重复"提示没触发。低信息量输入时模型会去抄历史里
+# 自己最近那段，所以窗口要盖得住半小时级的复读，不能只看相邻两轮。
+TOPIC_MINUTES = 45
 TOPIC_SIMILAR = 6          # 最长公共子串 ≥6 字就算"在说同一件事"
 
 # 自己改名的句式。只收会真的改变称呼的说法，不收"我叫了外卖"。
@@ -126,7 +131,7 @@ def name_lock(home: Home, text: str) -> dict[str, Any]:
     return {"blocked": False, "why": "", "match": ""}
 
 
-def say(home: Home, text: str, *, channel: str = "", owner_last_seen: float | None = None,
+def _say_unlocked(home: Home, text: str, *, channel: str = "", owner_last_seen: float | None = None,
         quota_cfg: dict[str, Any] | None = None, now: datetime | None = None,
         dry_run: bool = False) -> dict[str, Any]:
     """她要开口：先过三道闸，过了才记账。
@@ -142,7 +147,9 @@ def say(home: Home, text: str, *, channel: str = "", owner_last_seen: float | No
     if lock["blocked"]:
         return {"ok": False, "blocked": "identity", "why": lock["why"], "match": lock["match"]}
 
-    allowed, why = quota_mod.allow(home.quota(), quota_cfg, now, owner_last_seen)
+    # 先只预览有效票，不写回；身份/重复检查失败时不能把票消耗掉。
+    _, reserved = quota_mod.take_pending(home.quota(), now, action="speak")
+    allowed, why = quota_mod.allow(home.quota(), quota_cfg, now, owner_last_seen, reserved=reserved)
     if not allowed:
         return {"ok": False, "blocked": "quota", "why": why}
 
@@ -165,4 +172,21 @@ def say(home: Home, text: str, *, channel: str = "", owner_last_seen: float | No
         "at": now.isoformat(timespec="seconds"), "text": text,
         "channel": channel, "source": "say", "reserved": reserved,
     })
-    return {"ok": True, "text": text, "quota": st, "reserved": reserved}
+    # 她打字要花多久。通道照这个时间等一下再发——秒回像机器人。
+    from . import typing as typing_mod
+
+    wait_ms = typing_mod.delay_ms(text, busy=bool(reserved), now=now)
+    # 登记"待写回"：这一轮说了话，但心情/记忆/账还没写。
+    # 崩了能靠 resume.pending() 找回来；写回了 react 会销掉。
+    from . import resume as resume_mod
+
+    turn_id = resume_mod.turn_id_for(text, now)
+    resume_mod.register(home, text, turn_id=turn_id, channel=channel, now=now)
+    return {"ok": True, "text": text, "quota": st, "reserved": reserved,
+            "turn_id": turn_id,
+            "typing_ms": wait_ms, "typing_seconds": round(wait_ms / 1000.0, 2)}
+
+
+def say(home: Home, text: str, **kwargs) -> dict:
+    with home.lock("store"):
+        return _say_unlocked(home, text, **kwargs)

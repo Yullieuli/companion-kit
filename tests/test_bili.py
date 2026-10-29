@@ -462,6 +462,11 @@ class QuotaLedgerTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.home = Home.at(self.tmp.name)
         self.home.init()
+        # 账本按天归零，测试用的 NOW 是固定日期：把 store 里的日期对齐到 NOW，
+        # 否则跨零点后"今天"变了，这些用例会假失败。
+        q = self.home.quota()
+        q["date"] = NOW.date().isoformat()
+        self.home.save_json("quota.json", q)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -489,21 +494,27 @@ class QuotaLedgerTest(unittest.TestCase):
         self.assertIn("今天已经刷了 1", out["why"])
 
     def test_seed_from_old_state_once(self):
-        """迁移：老状态里今天已刷 3 条，第一次读要搬进 quota，别重置成 0。"""
+        """迁移：老状态里今天已刷 3 条，第一次读要搬进 quota，别重置成 0。
+
+        用真实今天：bili.load() 会把"不是今天的"账本归一化掉（day 归今天、计数清零），
+        写死一个固定日期在跨零点后会假失败。
+        """
+        now = datetime.now()
         st = bili.load(self.home)
         st["watched_today"] = 3
-        st["day"] = NOW.date().isoformat()
+        st["day"] = now.date().isoformat()
         bili.save(self.home, st)
-        self.assertEqual(bili.daily_used(self.home, "bili", now=NOW), 3)
+        self.assertEqual(bili.daily_used(self.home, "bili", now=now), 3)
         st2 = bili.load(self.home)
         st2["watched_today"] = 0        # 搬完就不再依赖它
         bili.save(self.home, st2)
-        self.assertEqual(bili.daily_used(self.home, "bili", now=NOW), 3)
+        self.assertEqual(bili.daily_used(self.home, "bili", now=now), 3)
 
     def test_new_day_resets(self):
+        now = datetime.now()
         net = FakeNet([item("BV1xx411c7mQ", "甲", dur=900)])
-        bili.tick(self.home, net=net, now=NOW)
-        self.assertEqual(bili.daily_used(self.home, "bili", now=NOW + timedelta(days=1)), 0)
+        bili.tick(self.home, net=net, now=now)
+        self.assertEqual(bili.daily_used(self.home, "bili", now=now + timedelta(days=1)), 0)
 
     def test_share_uses_same_ledger(self):
         from companion import quota

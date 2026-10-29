@@ -1,0 +1,87 @@
+name: 缺陷报告
+description: 某个功能没按预期工作
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先跑一次 `companion doctor`，它的输出能省掉一半来回。
+        如果是**安全问题**（凭据泄露、权限绕过、注入），请不要在这里发，走 [SECURITY.md](../blob/main/SECURITY.md)。
+
+  - type: dropdown
+    id: host
+    attributes:
+      label: 哪个宿主
+      description: 问题出现在哪条接入链路上
+      multiple: true
+      options:
+        - CLI（直接在终端跑）
+        - hermes
+        - dsh
+        - openclaw
+        - codex
+        - 其它 MCP 客户端
+        - Docker
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台
+      options:
+        - Windows
+        - WSL
+        - Linux
+        - macOS
+        - Docker
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: "`companion doctor` 第一行，或 `pip show companion-kit`"
+      placeholder: "companion 0.9.2 ｜ Python 3.12.13"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 实际行为是什么，你期望的是什么
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 怎么复现
+      description: 命令、输入、点了什么。能贴最小复现步骤最好
+      placeholder: |
+        1. companion connect hermes
+        2. 重启网关
+        3. 发一句话
+        4. 看到 ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: companion doctor 输出
+      description: 直接粘贴，不要截图
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志
+      description: "`~/.companion/logs/` 下的片段。**提交前删掉 API key、cookie、聊天内容**"
+      render: text
+    validations:
+      required: false

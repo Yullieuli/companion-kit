@@ -75,8 +75,19 @@ class TopicTest(Base):
         self.assertFalse(guard.same_topic(self.home, "你晚饭吃了什么", now=NOW)["dup"])
 
     def test_window_expires(self):
-        self.said("这个游戏的战斗系统真的很有节奏感", minutes_ago=11)
+        # 窗口是 guard.TOPIC_MINUTES（45 分钟）。11 分钟在窗口内，
+        # 得跨过整条窗口才算过期 —— 数字跟着常量走，别再写死一个 11。
+        self.said("这个游戏的战斗系统真的很有节奏感", minutes_ago=guard.TOPIC_MINUTES + 1)
         self.assertFalse(guard.same_topic(self.home, "这游戏的战斗系统节奏感很棒", now=NOW)["dup"])
+
+    def test_window_covers_half_hour_repeat(self):
+        """32 分钟前的原话被一字不差重发 —— 10 分钟窗口漏掉的就是这一种。
+
+        2026-10-29 18:04 真机：主人只发 3 个字，她把 17:32 那段原样又发了一遍。
+        低信息量输入时模型会去抄历史里自己最近那段，不是只在相邻两轮才复读。
+        """
+        self.said("行，应该是的，本公主就把话说透", minutes_ago=32)
+        self.assertTrue(guard.same_topic(self.home, "行，应该是的，本公主就把话说透", now=NOW)["dup"])
 
     def test_short_text_never_treated_as_repeat(self):
         self.said("嗯")

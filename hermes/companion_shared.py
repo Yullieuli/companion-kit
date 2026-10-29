@@ -32,6 +32,42 @@ def _note(line: str) -> None:
         pass
 
 
+def normalize_payload(payload: dict) -> dict:
+    """把 hermes shell hook 的 payload 规范化成"顶层可读"。
+
+    hermes 给钩子的 stdin 不是把调用参数原样平铺 —— 它有自己的字段表
+    （agent/shell_hooks.py::_payload_fields）：
+      · tool_name          → 顶层 tool_name
+      · args（dict）       → 顶层 **tool_input**（换了名字！）
+      · session_id / cwd / profile → 顶层
+      · **其余全部塞进 extra**：user_message、assistant_response、turn_id、
+        platform、conversation_history、group_id……全都在 extra 里。
+
+    2026-10-29 实测踩过：三个钩子各自读顶层字段，全读不到 ——
+    pre 拿不到 user_message（相关检索一直空查询）、post 拿不到
+    assistant_response（静默退出，账本永远空）、shared 拿不到 args
+    （生活事件从未标记过"讲过了"）。一个 payload 结构坑掉三个钩子。
+
+    这里统一做：extra 里的字段提升到顶层；args 同时补 tool_input 与 args 两个名字。
+    顶层已有的字段优先 —— extra 只补缺，不覆盖。
+    """
+    if not isinstance(payload, dict):
+        return payload
+    out = dict(payload)
+    extra = out.pop("extra", None)
+    if isinstance(extra, dict):
+        for k, v in extra.items():
+            if out.get(k) in (None, ""):
+                out[k] = v
+    # args 的两个名字都要有：hermes 把 kwargs["args"] 映射成 tool_input，
+    # 但有些钩子按 args 读。两个名字指向同一份数据，谁读都能拿到。
+    if isinstance(out.get("tool_input"), dict) and not isinstance(out.get("args"), dict):
+        out["args"] = out["tool_input"]
+    elif isinstance(out.get("args"), dict) and not isinstance(out.get("tool_input"), dict):
+        out["tool_input"] = out["args"]
+    return out
+
+
 def _texts(payload: dict) -> list[str]:
     """从两种钩子 payload 里挖出她发出去的正文。
 
@@ -40,7 +76,7 @@ def _texts(payload: dict) -> list[str]:
     """
     out: list[str] = []
     tool = str(payload.get("tool_name") or "")
-    raw = payload.get("args") or payload.get("arguments") or ""
+    raw = payload.get("args") or payload.get("arguments") or payload.get("tool_input") or ""
     if isinstance(raw, str):
         try:
             raw = json.loads(raw or "{}")
@@ -78,7 +114,7 @@ def main() -> int:
     except Exception:
         return 0
 
-    texts = _texts(payload)
+    texts = _texts(normalize_payload(payload))
     if not texts:
         return 0
 
@@ -90,6 +126,12 @@ def main() -> int:
         return 0
 
     home = Home.at(os.environ.get("COMPANION_HOME") or DEFAULT_HOME)
+    # store 不存在就什么都没得标 —— 但**要说一声**。
+    # 2026-10-29 实测：COMPANION_HOME 没设时钩子会悄悄操作一个空 store，
+    # 日志写"剩 0 条没讲"，看起来像"都标完了"，其实是"根本没读到"。
+    if not (home.root / "life" / "life.jsonl").exists():
+        _note(f"shared-skip 空 store（{home.root} 没有 life.jsonl）")
+        return 0
     marked = 0
     for t in texts:
         ids = life.match_shared(home, t)

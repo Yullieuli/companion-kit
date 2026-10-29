@@ -163,9 +163,11 @@ def mark_sent(home: Home, name: str, now: datetime | None = None) -> bool:
 def stats(home: Home) -> dict[str, Any]:
     items = (_index(home).get("items") or {})
     by_mood: dict[str, int] = {}
+    sent = 0
     for v in items.values():
         by_mood[v.get("mood") or "?"] = by_mood.get(v.get("mood") or "?", 0) + 1
-    return {"total": len(items), "by_mood": by_mood, "moods": MOODS}
+        sent += int(v.get("sent") or 0)
+    return {"total": len(items), "by_mood": by_mood, "sent": sent, "moods": MOODS}
 
 
 def remove(home: Home, name: str) -> bool:

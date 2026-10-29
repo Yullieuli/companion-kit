@@ -1,0 +1,53 @@
+name: 功能建议
+description: 想要一个新能力，或觉得现有行为该改
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        这个项目有一条硬规则：**能不加就不加**。
+        每加一个能力都要有停止条件、上限和回滚方式，所以请先说明「它解决什么问题」，
+        而不是「它叫什么名字」。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你遇到的具体问题
+      description: 现在是怎么用的、哪里别扭、绕了多大一圈
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你希望它怎么工作
+      description: 从使用者角度描述，不用先想实现
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 大概属于哪块
+      options:
+        - 宿主接入（connect / 新宿主）
+        - 记忆 / 人物卡 / 观点
+        - 心情 / 作息 / 主动决策
+        - 群聊 / 表情 / 语音
+        - B 站 / 网页 / 视觉
+        - 设备控制（手机 / 桌面 / 浏览器）
+        - MCP 工具面
+        - 安装 / 打包 / 发布
+        - 文档
+    validations:
+      required: true
+
+  - type: textarea
+    id: cost
+    attributes:
+      label: 它会不会让每轮更贵
+      description: |
+        这个项目对成本很敏感（目标：每轮新输入 < 5k、日花费 < ¥1）。
+        如果新能力每次都要往上下文里塞东西，请说明大概多少字。
+    validations:
+      required: false
