@@ -345,11 +345,25 @@ def _verb_for(row: dict[str, Any]) -> str:
 
 
 def _day_key(epoch: float, now: datetime) -> int:
+    """距今天数：0=今天，1=昨天。无法判断时返回 9（调用方按"很久以前"过滤）。
+
+    必须显式挡住异常值，不能依赖 ``fromtimestamp`` 的行为：
+    ``datetime.fromtimestamp(-1)`` 在 Windows 上抛 ``OSError``，
+    在 Linux/macOS 上返回 1969-12-31 —— 同一个输入两个平台给出不同答案，
+    于是「外部写坏了 epoch 也不能把整段生活流搞崩」这条只在一个平台成立。
+    """
     try:
-        d = datetime.fromtimestamp(float(epoch or 0)).date()
+        ts = float(epoch or 0)
+    except (TypeError, ValueError):
+        return 9
+    if ts <= 0:  # 缺失（0）或负数：不是有效时间戳
+        return 9
+    try:
+        d = datetime.fromtimestamp(ts).date()
     except (ValueError, OSError, OverflowError):
         return 9
-    return (now.date() - d).days
+    days = (now.date() - d).days
+    return 9 if days < 0 else days
 
 
 def _line(r: dict[str, Any], now: datetime, *, chatty: bool) -> str:
