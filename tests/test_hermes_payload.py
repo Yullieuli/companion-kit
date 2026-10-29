@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -113,6 +114,13 @@ class RealPayloadEndToEndTest(unittest.TestCase):
                     "HOME": str(self.home),
                     "USERPROFILE": str(self.home),
                     "PYTHONPATH": str(ROOT / "src")}
+        # Windows 上解释器启动要靠 SYSTEMROOT 定位 advapi32 的随机源，
+        # 环境里没有它时直接 fatal：
+        #   `Fatal Python error: _Py_HashRandomization_Init`
+        # 3.13 换了随机源，本地跑不出来；3.10 必挂。
+        for key in ("SYSTEMROOT", "SystemRoot", "WINDIR", "TEMP", "TMP"):
+            if key in os.environ:
+                self.env[key] = os.environ[key]
 
     def tearDown(self):
         self.tmp.cleanup()

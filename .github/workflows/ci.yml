@@ -13,6 +13,12 @@ jobs:
   test:
     name: test ${{ matrix.os }} / py${{ matrix.python }}
     runs-on: ${{ matrix.os }}
+    # Windows runner 的默认编码是 cp1252（en-US），而 `unittest -v` 会把每个
+    # 测试的中文 docstring 打到 stdout —— cp1252 编不了，整个测试进程崩。
+    # CLI 自己已经兜了（boot._force_utf8），但测试进程不经过 CLI 入口。
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
     strategy:
       fail-fast: false
       matrix:
