@@ -38,6 +38,32 @@ HOST = os.environ.get("COMPANION_HOST", "hermes")
 SILENT = ("silent", "diary")
 
 
+def _owner_talked_recently(home, minutes: float = 15.0) -> bool:
+    """主人最近有没有在说话。
+
+    主动开口最忌讳插进一场正在进行的对话：话题接不上，她的回复还会被挤到两条
+    不相干的消息中间。tick 本身看不到宿主的聊天状态（drive.tick 的 owner_waiting
+    默认 False，且没人计算它），所以在这一层挡一道。
+
+    只看**最近一条 user 记录**：它比 now 老过阈值，就说明这场对话已经停了。
+    不遍历全部历史——更早的记录只说明"今天说过话"，不是"正在说"。
+    """
+    try:
+        rows = home.read_jsonl("logs/turns.jsonl")
+    except Exception:
+        return False  # 读不到就不拦：宁可少一次沉默，也不要因为她不说话而卡住
+    now = datetime.now()
+    for row in reversed(rows):
+        if not isinstance(row, dict) or row.get("role") != "user":
+            continue
+        try:
+            at = datetime.fromisoformat(str(row.get("at") or ""))
+        except Exception:
+            return False
+        return (now - at).total_seconds() < minutes * 60
+    return False
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="只读：不扣额度、不写事件")
@@ -67,6 +93,11 @@ def main() -> int:
             )
             result = {**decision, "quota_allowed": allowed, "quota_why": why}
         else:
+            # 他正在说话就别插嘴：主动消息应该是"没人理她时她来找你"，
+            # 不是"你说一句她插一句"。15 分钟是对话停止的判定窗口——
+            # wake 每 15 分钟跑一次，正好对上。
+            if _owner_talked_recently(home):
+                return 0
             result = drive.tick(home, host=HOST)
     except Exception as e:
         print(f"tick 失败：{e}", file=sys.stderr)
