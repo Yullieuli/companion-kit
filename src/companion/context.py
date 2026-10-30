@@ -198,7 +198,11 @@ def compose(
         memory_text=memory.render(home, query),
         opinion_text=opinion.render(home, query, limit=2, settled_only=True, recent_days=3),
         person_text=people.render(home, people.OWNER),
-        life_text=life.render(home),
+        # 必须把 now 传下去：life.render 默认用 datetime.now()，而 compose 可能
+        # 被传入一个确定的时间（测试的固定时钟、宿主的补跑/回放）。
+        # 两个时间源不一致时，2 天窗口会算错——实测同一组数据下午跑通过、
+        # 晚上 23:21 跑就漏事件，因为 cut 从 10-28 14:43 挪到了 10-28 23:21。
+        life_text=life.render(home, now=now),
     )
 
 

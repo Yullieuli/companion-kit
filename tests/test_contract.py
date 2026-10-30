@@ -89,7 +89,7 @@ class ContractTest(unittest.TestCase):
                 memory_text=memory.render(self.home, ""),
                 opinion_text=opinion.render(self.home, ""),
                 person_text=people.render(self.home, people.OWNER),
-                life_text=life.render(self.home),
+                life_text=life.render(self.home, now=NOW),
             ).as_dict()
         return out
 
@@ -142,7 +142,7 @@ class ContractTest(unittest.TestCase):
                 memory_text=memory.render(self.home, ""),
                 opinion_text=opinion.render(self.home, ""),
                 person_text=people.render(self.home, people.OWNER),
-                life_text=life.render(self.home),
+                life_text=life.render(self.home, now=NOW),
             ).blocks
 
         first = cache.changed("s1", blocks())
@@ -169,7 +169,7 @@ class ReplayTest(unittest.TestCase):
             memory_text=memory.render(self.home, ""),
             opinion_text=opinion.render(self.home, ""),
             person_text=people.render(self.home, people.OWNER),
-            life_text=life.render(self.home),
+            life_text=life.render(self.home, now=NOW),
         ).as_dict()
 
     def test_turn_records_injection_and_replays(self):

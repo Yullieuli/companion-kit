@@ -408,9 +408,14 @@ def toml_verify(path: Path, table: str) -> tuple[bool, str]:
 
 def _yaml_hooks_bounds(lines: list[str]) -> tuple[int, int] | None:
     """返回 (``hooks:`` 行号, 段结束行号)。没有 hooks 段返回 None。"""
+    return _yaml_section_bounds(lines, "hooks")
+
+
+def _yaml_section_bounds(lines: list[str], name: str) -> tuple[int, int] | None:
+    """返回 (顶层段 ``name:`` 的行号, 段结束行号)。找不到返回 None。"""
     start = None
     for i, ln in enumerate(lines):
-        if ln.rstrip() == "hooks:":
+        if ln.rstrip() == f"{name}:":
             start = i
             break
     if start is None:
@@ -422,6 +427,51 @@ def _yaml_hooks_bounds(lines: list[str]) -> tuple[int, int] | None:
             end = i
             break
     return start, end
+
+
+def yaml_inject_mcp(
+    text: str,
+    server: str,
+    command: str,
+    args: list[str],
+    env: dict[str, str],
+) -> tuple[str, bool]:
+    """把 companion 挂成 ``mcp_servers:`` 下的一个 stdio server。返回 (新文本, 是否新增)。
+
+    为什么非做不可：hooks 只覆盖「注入上下文」和「写回说话」两件事，其余能力
+    ——记忆写入/检索、表情、群聊判断、观点加权、网页读取、请示单——全是 MCP 工具。
+    模型调不到就等于不存在。2026-10-30 实测：只接 hooks 不接 MCP 时，
+    ``memory/`` 0 页、``stickers/`` 0 张、``group/`` 0 次，34 个工具里 31 个闲置。
+    """
+    lines = text.splitlines(True)
+    for ln in lines:
+        if ln.rstrip() == f"  {server}:":
+            return text, False  # 已经挂过了
+
+    block = [f"  {server}:\n", f"    command: {_yaml_quote(command)}\n"]
+    if args:
+        block.append("    args:\n")
+        for a in args:
+            block.append(f"      - {_yaml_quote(a)}\n")
+    else:
+        block.append("    args: []\n")
+    if env:
+        block.append("    env:\n")
+        for k, v in env.items():
+            block.append(f"      {k}: {_yaml_quote(v)}\n")
+
+    bounds = _yaml_section_bounds(lines, "mcp_servers")
+    if bounds is None:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        text += "\nmcp_servers:\n"
+        lines = text.splitlines(True)
+        bounds = _yaml_section_bounds(lines, "mcp_servers")
+        if bounds is None:
+            raise ConnectError("写入 mcp_servers: 段失败")
+    start, end = bounds
+    lines[end:end] = block
+    return "".join(lines), True
 
 
 def _yaml_quote(s: str) -> str:
@@ -797,6 +847,11 @@ class HermesHost(Host):
         for pair in self._expected():
             if pair not in configured or pair not in allowed:
                 return False
+        # MCP 没挂也算没接好：否则第二次 connect 会直接跳过，
+        # 「hooks 在、工具没有」这种状态就永远补不上。
+        text = read_text(self.root / "config.yaml")
+        if not any(ln.rstrip() == "  companion:" for ln in text.splitlines()):
+            return False
         return True
 
     def plan(self) -> list[Step]:
@@ -867,6 +922,33 @@ class HermesHost(Host):
         steps.append(
             Step("run", "批准 shell 钩子（不批准会静默跳过）", str(self.root / "shell-hooks-allowlist.json"), fn=approve)
         )
+
+        # ⑤ MCP —— hooks 只管「注入上下文」和「写回说话」，其余能力都在 MCP 工具里。
+        # 缺这一步的表现极具迷惑性：对话完全正常，但 memory/ 永远是空的、
+        # 表情库一张图都没有、群聊从不接话。因为它不报错，只是那些工具没人调。
+        cfg_mcp = self.root / "config.yaml"
+
+        def patch_mcp() -> None:
+            text = read_text(cfg_mcp)
+            new, added = yaml_inject_mcp(
+                text,
+                "companion",
+                sys.executable,
+                ["-m", "companion", "mcp"],
+                {"COMPANION_HOME": str(self.home.root)},
+            )
+            if added:
+                write_text(cfg_mcp, new, newline="")
+
+        steps.append(
+            Step(
+                "edit",
+                "挂上 MCP server（34 个工具；只挂 hooks 的话其余 31 个没人调）",
+                str(cfg_mcp),
+                path=cfg_mcp,
+                fn=patch_mcp,
+            )
+        )
         return steps
 
     def verify(self) -> tuple[bool, str]:
@@ -878,7 +960,11 @@ class HermesHost(Host):
                 return False, f"config.yaml 里没有 {event} 的 companion 钩子"
             if (event, cmd) not in allowed:
                 return False, f"{event} 的钩子没批准（会静默不跑）"
-        return True, "钩子已接上且已批准"
+        # MCP 也要验：只验 hooks 的话，工具没挂上也会报「已接上」
+        text = read_text(self.root / "config.yaml")
+        if not any(ln.rstrip() == "  companion:" for ln in text.splitlines()):
+            return False, "config.yaml 的 mcp_servers 里没有 companion（其余 31 个工具不会生效）"
+        return True, "钩子已接上且已批准；MCP 已挂"
 
 
 # ── dsh ──────────────────────────────────────────────────────
