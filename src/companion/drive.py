@@ -50,6 +50,25 @@ def _pending_life(home: Home) -> int:
     return len(life_mod.unshared(home))
 
 
+def _free_time_state(home: Home, now: datetime) -> tuple[int, float]:
+    """今天给过几次自由时间、距上一次多久（小时）。
+
+    单独存 ``initiative/free_time.json``，不塞进 ``quota.buckets``——说话额度和
+    「自己过日子」是两本账，混在一起会互相挤占：她多过了两段自由时间，
+    就莫名其妙少说两句话。
+    """
+    try:
+        d = home.read_json("initiative/free_time.json") or {}
+    except Exception:
+        d = {}
+    if str(d.get("date") or "") != now.date().isoformat():
+        return 0, 99.0  # 跨天清零；没有记录时当作"很久没给过"
+    used = int(d.get("count") or 0)
+    last = float(d.get("last_at") or 0.0)
+    hours = (now.timestamp() - last) / 3600.0 if last else 99.0
+    return used, max(0.0, hours)
+
+
 def _pending_life_hint(home: Home) -> str:
     """最近一件还没跟他讲过的事，一句话。
 
@@ -153,6 +172,7 @@ def _tick_unlocked(
     spent = cost.today_total(home, now)
     b = {**cost.DEFAULT_BUDGET, **(budget or {})}
     remaining = max(0.0, float(b["daily_cny"]) - spent)
+    free_time_used, hours_since_free = _free_time_state(home, now)
     bili_ok, bili_why, bili_pending = _bili_state(home, now)
     if bili_ok and not bili.has_credential(home):
         bili_ok, bili_why = False, "还没配 B 站凭证"
@@ -176,6 +196,8 @@ def _tick_unlocked(
         extra={"feedback": fb, "pending_life_hint": _pending_life_hint(home)},
         bili_due=bili_ok,
         bili_why=bili_why,
+        free_time_used=free_time_used,
+        hours_since_free=hours_since_free,
     )
     decision = initiative.decide(situation, rnd)
 

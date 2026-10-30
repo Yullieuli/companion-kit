@@ -35,6 +35,9 @@ COST_EST = {
     "share": 0.035,
     "bili": 0.012,   # 只读一条：一次短会话。刷本身不花 token
     "diary": 0.008,
+    # 自由时间：一段完整的、她自己安排的时间，通常要读片/抽帧/写观点，
+    # 是六个动作里唯一"做一件事"而不是"做一个动作"的，所以估得最贵。
+    "free_time": 0.060,
     "silent": 0.0,
 }
 
@@ -55,6 +58,9 @@ class Situation:
     owner_waiting: bool = False      # 主人刚说完话，等她接
     bili_due: bool = False           # B 站那边还有额度、也隔够久了
     bili_why: str = ""               # 不 due 的原因（写进日志，方便回看）
+    free_time_used: int = 0          # 今天已经给过几次自由时间
+    free_time_max: int = 3           # 一天最多几段（再多就是在刷时长，不是在过日子）
+    hours_since_free: float = 99.0   # 距上次自由时间多久
 
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -237,6 +243,27 @@ def _candidates(s: Situation) -> list[Candidate]:
     # 写日记：不打扰任何人，任何时候都允许
     score = 0.28 + (0.10 if s.pending_life else 0)
     out.append(Candidate("diary", score, "有些事想自己记下来", COST_EST["diary"]))
+
+    # 自由时间：给她一段完整的、可以自己安排的时间。
+    # 和 bili 的区别：bili 是"看一眼就走"，free_time 是"挑一件事做到底"。
+    # 一天最多 3 段、间隔 3 小时以上——否则就是在刷时长，不是在过日子。
+    # 基础分压得很低（0.08）：默认她不该主动找事，除非真的隔久了又有精神。
+    score = 0.08
+    why = []
+    if s.free_time_used >= s.free_time_max:
+        why.append(f"今天已经自己过完 {s.free_time_used} 段了")
+    elif s.hours_since_free < 3:
+        why.append("刚自己待过，先不急着又要")
+    else:
+        score += 0.34
+        why.append("有段时间是自己的")
+        if energy >= 10:
+            score += 0.06
+            why.append("还有精神")
+        if low:
+            score -= 0.15
+            why.append("心情低，做不动")
+    out.append(Candidate("free_time", score, "、".join(why), COST_EST["free_time"]))
 
     # 什么都不做：基线。真实的她大部分时间是安静的
     out.append(Candidate("silent", 0.35, "没什么想说的", 0.0))

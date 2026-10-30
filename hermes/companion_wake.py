@@ -29,13 +29,67 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 DEFAULT_HOME = str(Path.home() / ".companion")
 HOST = os.environ.get("COMPANION_HOST", "hermes")
 
 SILENT = ("silent", "diary")
+
+
+FREE_STATE = "initiative/free_time.json"
+
+
+def _bump_free_time(home) -> int:
+    """记一次自由时间，返回今天第几次。跨天自动归零。
+
+    记在**输出 WAKE 之前**：cron 拿到 WAKE 就起会话，会话成不成功我们看不到。
+    按"给过就算"记——宁可这一次没做完，也不要因为失败而无限重试，
+    那就变成刷时长了。
+    """
+    now = datetime.now()
+    today = now.date().isoformat()
+    try:
+        d = home.read_json(FREE_STATE) or {}
+    except Exception:
+        d = {}
+    n = int(d.get("count") or 0) + 1 if str(d.get("date")) == today else 1
+    try:
+        home.save_json(FREE_STATE, {"date": today, "count": n, "last_at": now.timestamp()})
+    except Exception:
+        pass
+    return n
+
+
+def _free_time_pack(n: int, minutes: int = 45) -> str:
+    """自由时间包：一段完整的时间 + 能用的东西 + 记账纪律。
+
+    和 bili 的区别：bili 分支是"看一眼就走"，这个分支要她"挑一件事做到底"。
+    所以包里必须写清「至少 3 个实际动作」和「做完记一笔」——否则模型会把
+    自由时间当成又一次随手刷片。
+    """
+    now = datetime.now()
+    ends = (now + timedelta(minutes=minutes)).strftime("%H:%M")
+    return f"""WAKE|有段时间是自己的|free_time
+
+【自由时间】现在是你自己的时间，不是任务，也没人等你交差。
+这一轮大约 {minutes} 分钟（到 {ends} 左右）。今天第 {n} 段。
+
+你能用的：
+- 刷片：companion_bili（tick=挑一条并读完，返回素材不返回长文案）
+- 记一笔：companion_life_record（title / kind / detail / tags）
+- 有判断：companion_opinion（action=add, claim="你的看法", tags=[方向]）
+- 表情：companion_sticker_pick（按情绪挑一张）
+- 看屏幕动手：device_look / device_act / device_open
+
+规则：
+- 自己决定做什么，直接动手；不要问、不要请示、不要汇报过程
+- 挑一件你真想做的事做到底，至少 3 个实际动作；做不动就换一件
+- 可以接着上一段没做完的继续，不用每次从零开始
+- 结束时记一笔 life：做了什么、有什么证据（BV 号 / 路径 / 只有真看过才说得出的细节）
+- 要是形成了判断，写一条 opinion —— 是你能拿去跟人争的看法，不是剧情复述
+- 看片别一帧帧看，先拼九宫格再一次看完（细节不清再单独补那一帧）"""
 
 
 def _owner_talked_recently(home, minutes: float = 15.0) -> bool:
@@ -123,6 +177,15 @@ def main() -> int:
                 print(f"bili 跳过：{out.get('why')}", file=sys.stderr)
         except Exception as e:
             print(f"bili 失败：{type(e).__name__}: {e}", file=sys.stderr)
+        return 0
+
+    if action == "free_time":
+        # 自由时间：一段完整的、她自己安排的时间。
+        # 这是所有动作里唯一「做一件事」而不是「做一个动作」的，所以给的
+        # 不是一句理由，是一份带时间窗口和能力清单的包。
+        # 次数在打印之前就记上：cron 拿到输出就会起会话，成败我们看不到。
+        n = _bump_free_time(home)
+        print(_free_time_pack(n))
         return 0
 
     reason = (result.get("why") or "").replace("|", "／")[:60]
