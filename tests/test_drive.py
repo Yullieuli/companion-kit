@@ -111,7 +111,15 @@ class TickTest(unittest.TestCase):
         self.assertIn("action", rows[0])
         self.assertIn("spent_today", rows[0])
 
-    def test_mood_is_persisted(self):
+    def test_tick_does_not_persist_decay(self):
+        """tick 不该把 decay 写回磁盘。
+
+        写回会让衰减按**调用次数**累积：每次 tick 都拿同一个 last_change 再乘一次
+        factor，而 last_change 只在标签变化时才更新。实测 5 次 tick 把 closeness
+        从 1.2 打到 0.78（按时间它应该一直是 1.1）；一天 90 次 heartbeat 足够把
+        1.38 打到 0.1，表现为「她每天醒来都对主人很冷淡」。
+        decay 是读时投影，落盘只由真实事件（mood_rules.nudge）触发。
+        """
         self.home.save_json("mood/state.json", {
             "axes": {"satisfaction": 30, "closeness": 0, "energy": 0},
             "label": "开心",
@@ -119,8 +127,12 @@ class TickTest(unittest.TestCase):
             "history": [],
         })
         drive.tick(self.home, now=T0)
-        axes = self.home.mood()["axes"]["satisfaction"]
-        self.assertLess(axes, 30)  # 衰减被写回去了
+        self.assertEqual(self.home.mood()["axes"]["satisfaction"], 30)
+
+        # 连跑几次也不该动 —— 按次数衰减的话这里会一路掉
+        for _ in range(4):
+            drive.tick(self.home, now=T0)
+        self.assertEqual(self.home.mood()["axes"]["satisfaction"], 30)
 
 
     def test_second_host_cannot_steal_the_clock(self):

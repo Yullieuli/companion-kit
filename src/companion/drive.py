@@ -227,7 +227,13 @@ def _tick_unlocked(
             "owner_waiting": bool(owner_waiting),
         },
     )
-    home.save_json("mood/state.json", m)
+    # 不写回 mood/state.json：decay 是「读时投影」，不是状态变更。
+    #
+    # 写回会让衰减按**调用次数**累积——每次 tick 都拿同一个 last_change 再乘一次
+    # factor，而 last_change 只在标签变化时才更新。实测 5 次 tick 把 closeness
+    # 从 1.2 打到 0.78，而按时间它应该一直是 1.1；一天 90 次 heartbeat 足够把
+    # 1.38 打到 0.1，表现为「她每天醒来都对主人很冷淡」。
+    # 落盘只由真实事件（mood_rules.nudge）触发，那里会同时更新 last_change。
 
     # 她"打字"要多久：主动开口一般比回话长（她在组织语言）。
     # 通道照这个数等一下再发，不要秒回。
