@@ -188,6 +188,19 @@ def main() -> int:
         print(_free_time_pack(n))
         return 0
 
+    if action == "sing":
+        # 唱是「必须交付」的动作：只生成不发，主人根本不知道她唱过。
+        # 2026-10-31 实测：决策 2 次、voice/ 里 0 个新文件——她起来只说了句话
+        # 就结束了，压根没调 voice。所以把「生成 → 发送」写死在唤醒包上。
+        print(
+            "WAKE|想唱两句|sing\n\n"
+            "【唱】挑两三句你真想唱的（歌词也行，今天的心情也行），然后必须走完两步：\n"
+            "1. 调 companion_voice（sing=true, text=那两三句）生成音频\n"
+            "2. 拿到路径后，用宿主能发语音的工具把它发给他——只生成不发，等于没唱过\n"
+            "3. 附件配一句话，别只甩一个音频文件"
+        )
+        return 0
+
     reason = (result.get("why") or "").replace("|", "／")[:60]
     print(f"WAKE|{reason}|{action}")
     return 0

@@ -512,6 +512,25 @@ def _external(text: str, names: list[str]) -> tuple[str, int]:
     return _mask(clean, names), len(hits)
 
 
+def _digest(mat: dict[str, Any]) -> str:
+    """把读片素材压成一两句写进 life.detail。
+
+    弹幕和热评是最能看出「大家在吵什么」的部分，而观点恰恰要靠这个才有依据。
+    原来它们只活在当轮上下文里，下一轮她就忘了——表现成「看过但说不出所以然」。
+    """
+    bits: list[str] = []
+    for c in (mat.get("hot_comments") or [])[:1]:
+        if isinstance(c, dict):
+            t = str(c.get("text") or "")[:56]
+            if t:
+                bits.append(f"热评「{t}」")
+    for d in (mat.get("danmaku_hot") or [])[:1]:
+        t = str(d.get("text") if isinstance(d, dict) else d)[:26]
+        if t:
+            bits.append(f"弹幕「{t}」")
+    return "；".join(bits)[:170]
+
+
 def debrief(home: Home, bvid: str, *, net: Any, cfg: dict[str, Any] | None = None,
             frames: bool | None = None, names: list[str] | None = None) -> dict[str, Any]:
     """把一条视频读成一段文字。返回结构给模型看，不是给日志看。"""
@@ -739,7 +758,17 @@ def tick(home: Home, *, net: Any = None, cfg: dict[str, Any] | None = None,
             return {"ok": False, "stage": "gate", "why": d["why"]}
 
     st = load(home)
-    keywords = [t for o in opinion.theses(home) if o.confidence >= 0.6 for t in o.tags][:1]
+    # 门槛从 0.6 降到 0.45：观点是从 0.5 起步的，0.6 意味着"永远搜不了"，
+    # 而"搜自己想看的"正是观点长起来的前提——这是个死锁。
+    keywords = [t for o in opinion.theses(home) if o.confidence >= 0.45 for t in o.tags][:1]
+    if not keywords:
+        # 观点还没成形时用口味词兜底。否则搜索入口永远空着，她只能一直刷
+        # 热门/排行，兴趣永远长不出新方向——2026-10-31 实测就是这个状态。
+        likes = [w for w in ((cfg.get("taste") or {}).get("like") or []) if w]
+        if likes:
+            import random as _random
+
+            keywords = [_random.choice(likes)]
     if net is None:
         from .bilinet import Net
         net = Net(home.root)
@@ -768,7 +797,7 @@ def tick(home: Home, *, net: Any = None, cfg: dict[str, Any] | None = None,
 
     row = life.record(
         home, _life_title(item), kind="watch",
-        detail="", tags=["b站"],
+        detail=_digest(mat), tags=["b站"],
         at=now, extra={"bvid": item["bvid"], "score": item["score"], "src": item.get("src", "")},
     )
     mark_served(st, item, now)

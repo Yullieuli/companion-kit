@@ -115,7 +115,7 @@ class LifeLogicTest(unittest.TestCase):
         at = datetime(2026, 10, 28, 10, 43)
         self._add(at, "刷B站，看了《旗舰手机芯片大横评》")
         op.add(self.home, "横评的价值在解释为什么，不是给排名。", tags=["微架构"], confidence=0.5, now=at)
-        hits = life.stances(self.home, life.recent(self.home))
+        hits = life.stances(self.home, life.recent(self.home, now=at))
         self.assertEqual(len(hits), 1)
         self.assertIn("解释为什么", hits[0][0])
         self.assertTrue(hits[0][1], "还没想定的要标出来，不能冒充定论")
