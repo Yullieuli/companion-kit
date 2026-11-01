@@ -430,7 +430,7 @@ def gather(net: Any, cfg: dict[str, Any], *, last_bvid: str = "",
             out += [normalize(x, "dynamic") for x in net.dynamics()]
         except Exception as e:
             notes.append(f"动态失败:{type(e).__name__}")
-    for kw in (keywords or [])[:1]:  # 搜索一次就够，多了会烧读额度
+    for kw in (keywords or [])[:2]:  # 两个词够了：每个词有缓存，且读额度只有 3000/天
         try:
             if home is None:
                 hits = net.search(kw)
@@ -465,7 +465,16 @@ def pick(items: list[dict[str, Any]], home: Home, st: dict[str, Any], cfg: dict[
 
     # 分高者优先；同分选短的（便宜，且她其实更容易看完）
     fresh.sort(key=lambda x: (x["score"], -int(x.get("duration") or 0)), reverse=True)
+    # 探索：两成的概率不在最高分里选，而是从池子前 8 条里随机捡一条。
+    # 不这么做会形成正反馈——高分来自某类标题，这类标题又被 taste.like 加固，
+    # 兴趣圈越走越窄（2026-11-01 实测：连刷三支极客湾 + 三支影之刃零）。
+    # 代价是偶尔看到一条不那么想看的，但那正是兴趣长出新方向的入口。
     best = fresh[0]
+    if len(fresh) >= 4:
+        import random as _random
+
+        if _random.random() < 0.2:
+            best = _random.choice(fresh[: min(8, len(fresh))])
     if best["score"] < int(cfg.get("min_score") or 0):
         return {"ok": False, "why": f"没有一条够想看的（最高 {best['score']} 分：{best['title'][:30]}）",
                 "top": fresh[:3]}
@@ -758,9 +767,26 @@ def tick(home: Home, *, net: Any = None, cfg: dict[str, Any] | None = None,
             return {"ok": False, "stage": "gate", "why": d["why"]}
 
     st = load(home)
-    # 门槛从 0.6 降到 0.45：观点是从 0.5 起步的，0.6 意味着"永远搜不了"，
-    # 而"搜自己想看的"正是观点长起来的前提——这是个死锁。
-    keywords = [t for o in opinion.theses(home) if o.confidence >= 0.45 for t in o.tags][:1]
+    # 原来这里是 ``[:1]``，固定取第一个 tag —— 而 opinion 的返回顺序是稳定的，
+    # 等于永远搜同一个词。2026-11-01 实测：每次都搜「动作游戏设计」，搜出来
+    # 九成是影之刃零，连刷三支；同一批 tag 又被 taste.like 反复加固
+    # （极客湾/评测 命中就 +3），兴趣圈越走越窄。
+    # 改成：从所有够格的 tag 里随机取两个，并避开上次用过的那个。
+    _tags: list[str] = []
+    for o in opinion.theses(home):
+        if o.confidence < 0.45:
+            continue
+        for t in (o.tags or []):
+            t = str(t or "").strip()
+            if t and t not in _tags:
+                _tags.append(t)
+    _last_kw = str(st.get("last_kw") or "")
+    _pool = [t for t in _tags if t != _last_kw] or _tags
+    keywords: list[str] = []
+    if _pool:
+        import random as _random
+
+        keywords = _random.sample(_pool, min(2, len(_pool)))
     if not keywords:
         # 观点还没成形时用口味词兜底。否则搜索入口永远空着，她只能一直刷
         # 热门/排行，兴趣永远长不出新方向——2026-10-31 实测就是这个状态。
@@ -806,6 +832,8 @@ def tick(home: Home, *, net: Any = None, cfg: dict[str, Any] | None = None,
     st["watched_today"] = record_used(home, "bili", now)
     st["last_at"] = now.timestamp()
     st["last_bvid"] = item["bvid"]
+    # 记下这轮用的搜索词，下一轮避开它——不然随机也会连着抽中同一个方向
+    st["last_kw"] = (keywords[0] if keywords else "")
     save(home, st)
     events.emit(home, "bili_watch", now, bvid=item["bvid"], title=item["title"][:60],
                 score=item["score"], minutes=int(item.get("duration") or 0) // 60)

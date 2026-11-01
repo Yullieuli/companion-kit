@@ -202,6 +202,30 @@ class PickTest(Base):
         self.assertFalse(got["ok"])
         self.assertIn("没有一条", got["why"])
 
+    def test_explores_sometimes(self):
+        """池子够大时会偶尔不选最高分——否则兴趣圈会自我加固。"""
+        from unittest import mock
+
+        pool = [item(f"BV1xx411c7m{i}", f"极客湾评测第{i}期", dur=600) for i in range(6)]
+        pool.append(item("BV1xx411c7mZ", "冷门纪录片", dur=600))
+        st = bili.load(self.home)
+        cfg = bili.config(self.home)
+        # 强制走探索分支，应该选中池子里任意一条而不一定是最高分
+        with mock.patch("random.random", return_value=0.05):
+            picked = {bili.pick(pool, self.home, st, cfg, now=NOW)["item"]["bvid"] for _ in range(30)}
+        self.assertGreater(len(picked), 1, "强制探索时不该每次都是同一条")
+
+    def test_keeps_highest_without_explore(self):
+        """不探索时仍然选最高分：极客湾评测分高就选它。"""
+        from unittest import mock
+
+        pool = [item(f"BV1xx411c7m{i}", f"极客湾评测第{i}期", dur=600) for i in range(5)]
+        pool.append(item("BV1xx411c7mZ", "无题", dur=600))
+        with mock.patch("random.random", return_value=0.99):
+            got = bili.pick(pool, self.home, bili.load(self.home), bili.config(self.home), now=NOW)
+        self.assertTrue(got["ok"])
+        self.assertIn("极客湾", got["item"]["title"])
+
 
 class TickTest(Base):
     def test_tick_records_life_and_state(self):
