@@ -116,6 +116,44 @@ class CharacterTest(unittest.TestCase):
     def test_render_empty_when_nothing_strong(self) -> None:
         self.assertEqual(character.render(self.home), "")
 
+    def test_chat_reinforces_existing_traits(self) -> None:
+        """反复聊到某个方向会强化它——人跟人交往是塑形最狠的部分。"""
+        for i in range(3):
+            self._life(f"刷片{i}", ["芯片能效"], days_ago=i + 1)
+        # 主人两次聊到同一个方向
+        for i in range(2):
+            self.home.append_jsonl("logs/turns.jsonl", {
+                "at": (self.now - timedelta(days=i + 1)).isoformat(timespec="minutes"),
+                "role": "user", "said": "今天那个芯片能效的对比挺有意思",
+            })
+        data = character.rebuild(self.home, now=self.now)
+        ev = data["traits"]["芯片能效"]["evidence"]
+        self.assertTrue(any("聊天" in e["what"] for e in ev), "聊天要留证据")
+
+    def test_chat_without_existing_direction_is_ignored(self) -> None:
+        """只聊到一个从没看过的方向，不该凭空长出性格——那是一次性话题。"""
+        for i in range(3):
+            self._life(f"刷片{i}", ["显卡价格"], days_ago=i + 1)
+        self.home.append_jsonl("logs/turns.jsonl", {
+            "at": (self.now - timedelta(days=1)).isoformat(timespec="minutes"),
+            "role": "user", "said": "今天聊了聊量子计算",
+        })
+        data = character.rebuild(self.home, now=self.now)
+        self.assertNotIn("量子计算", data["traits"])
+
+    def test_only_user_turns_count(self) -> None:
+        """只算主人说的话：她自己说了什么，life/opinion 已经记了。"""
+        for i in range(3):
+            self._life(f"刷片{i}", ["芯片能效"], days_ago=i + 1)
+        for i in range(3):
+            self.home.append_jsonl("logs/turns.jsonl", {
+                "at": (self.now - timedelta(days=i + 1)).isoformat(timespec="minutes"),
+                "role": "assistant", "said": "芯片能效这事儿我说过很多次了",
+            })
+        data = character.rebuild(self.home, now=self.now)
+        ev = data["traits"]["芯片能效"]["evidence"]
+        self.assertFalse(any("聊天" in e["what"] for e in ev))
+
     def test_stats_reports_top(self) -> None:
         for i in range(4):
             self._life(f"刷片{i}", ["显卡价格"], days_ago=i + 1)

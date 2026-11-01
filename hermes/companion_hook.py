@@ -264,6 +264,10 @@ def main() -> int:
                 home.append_jsonl("logs/turns.jsonl", {
                     "at": datetime.now().isoformat(timespec="seconds"),
                     "role": "user", "platform": platform, "chars": len(user_text),
+                    # 正文要存：原来只留字数，导致「和主人的聊天」这条最重要的
+                    # 经历来源完全进不了性格聚合——她能记住看了什么片，却记不住
+                    # 跟主人聊了什么。截断 300 字，长文不撑爆日志。
+                    "said": user_text[:300],
                     "session": session[:32],
                 })
                 marker.parent.mkdir(parents=True, exist_ok=True)

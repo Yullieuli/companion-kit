@@ -153,6 +153,29 @@ def rebuild(home: Home, *, days: float = 120.0, now: datetime | None = None) -> 
         for tag in (o.tags or []):
             bump(_clean_tag(tag), weight, at, str(o.claim or "")[:40])
 
+    # ③ 和主人的聊天——人跟人交往是塑形最狠的部分，权重 1.4：
+    #    比"看了一支片"重，比"自己动手做了一个东西"轻。
+    #
+    #    这里只做**匹配已知方向**，不做新词发现：从自由文本里抽话题要么上分词
+    #    要么上模型，前者噪音大、后者花钱，而「聊到的恰好是她已经在意的东西」
+    #    这个信号本身就足够强——反复聊到，说明这个方向在她生活里真的重要。
+    known = {t for t, s in scores.items() if s > 0}
+    if known:
+        try:
+            turns = home.read_jsonl("logs/turns.jsonl", limit=1000)
+        except Exception:
+            turns = []
+        for tr in turns:
+            if str(tr.get("role") or "") != "user":
+                continue  # 只看主人说的话：她自己说了什么，life/opinion 已经记了
+            said = str(tr.get("said") or "")
+            at = _parse(tr.get("at"))
+            if not said or at is None or at < cutoff:
+                continue
+            for tag in known:
+                if tag and tag in said:
+                    bump(tag, 1.4, at, "聊天：" + said[:32])
+
     traits: dict[str, Any] = {}
     for tag, score in scores.items():
         # 次数不够的，再高也不叫倾向
