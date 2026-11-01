@@ -30,6 +30,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timedelta
 import unittest
 from pathlib import Path
 
@@ -170,12 +171,14 @@ class RealPayloadEndToEndTest(unittest.TestCase):
 
         from companion import life as life_mod
 
-        at = "2026-10-29T15:45:00"
+        # 用相对时间：hook 只匹配 2 天内的 life，写死日期会在两天后必然变红
+        _when = datetime.now() - timedelta(hours=1)
+        at = _when.isoformat(timespec="seconds")
         title = "刷B站，看了《RTX 5080 首发评测》"
         rid = life_mod._id(_dt.fromisoformat(at), title)
         (self.home / "life").mkdir(parents=True, exist_ok=True)
         (self.home / "life" / "life.jsonl").write_text(
-            json.dumps({"at": at, "epoch": 1793260000, "id": rid,
+            json.dumps({"at": at, "epoch": int(_when.timestamp()), "id": rid,
                         "kind": "bili", "shared": False, "title": title, "detail": ""},
                        ensure_ascii=False) + "\n", encoding="utf-8")
         payload = {

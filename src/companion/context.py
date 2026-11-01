@@ -114,6 +114,7 @@ def build(
     opinion_text: str = "",
     person_text: str = "",
     life_text: str = "",
+    character_text: str = "",
 ) -> Context:
     now = now or datetime.now()
     home.init()
@@ -136,6 +137,10 @@ def build(
     blocks.append(Block("state", state, 20))
     if memory_text.strip():
         blocks.append(Block("memory", memory_text.strip(), 40, sticky=True))
+    # 性格放在观点之前：先说她"偏向什么"，再说她"认为什么"。
+    # 反过来会读成"她有很多判断，但不知道她是什么人"。
+    if character_text.strip():
+        blocks.append(Block("character", character_text.strip(), 45, sticky=True))
     if opinion_text.strip():
         blocks.append(Block("opinion", opinion_text.strip(), 50, sticky=True))
     if person_text.strip():
@@ -180,7 +185,15 @@ def compose(
     "同一份 store 拼出不同文本"就会发生，而且极难发现。契约测试只盯得住
     CLI 和 MCP——让其余入口物理上复用同一段代码，才不会有第五种拼法。
     """
-    from . import life, memory, opinion, people   # 局部导入：这几个模块也依赖 store，避免环
+    from . import character, life, memory, opinion, people   # 局部导入：这几个模块也依赖 store，避免环
+
+    # 性格是聚合出来的，不能每轮重算（扫几十条 life + 全部 opinion 很贵）。
+    # 挂在对话入口上、6 小时才刷一次：她一天聊几次，每次都会顺手更新，
+    # 又不至于为了"性格"多开一个定时任务。
+    try:
+        character.maybe_rebuild(home, now=now)
+    except Exception:
+        pass
 
     # life 给**全部**（含还没跟他讲过的），只按 shared 标注去重：
     #   之前一度只给 shared=True，结果她根本不知道自己刷过显卡评测——
@@ -203,6 +216,7 @@ def compose(
         # 两个时间源不一致时，2 天窗口会算错——实测同一组数据下午跑通过、
         # 晚上 23:21 跑就漏事件，因为 cut 从 10-28 14:43 挪到了 10-28 23:21。
         life_text=life.render(home, now=now),
+        character_text=character.render(home),
     )
 
 

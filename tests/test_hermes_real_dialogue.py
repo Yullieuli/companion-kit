@@ -22,6 +22,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import datetime
 import unittest
 from pathlib import Path
 
@@ -228,7 +229,7 @@ class NoiseFilterTest(unittest.TestCase):
             "at": "2026-10-29T11:00:00", "epoch": 1793263600,
             "kind": "bili", "title": "刷了抖音", "shared": False, "detail": "",
         })
-        text = life.render(self.home)
+        text = life.render(self.home, now=datetime(2026, 10, 29, 12, 0))
         self.assertIn("看了显卡评测", text)
         self.assertIn("刷了抖音", text, "她做过的事她必须知道")
         self.assertIn("已跟他说过", text)
@@ -244,7 +245,7 @@ class NoiseFilterTest(unittest.TestCase):
             "at": "2026-10-29T11:00:00", "epoch": 1793263600,
             "kind": "bili", "title": "还没说的新事", "shared": False, "detail": "",
         })
-        text = life.render(self.home)
+        text = life.render(self.home, now=datetime(2026, 10, 29, 12, 0))
         self.assertLess(text.index("还没说的新事"), text.index("讲过的旧事"))
 
     def test_opinion_settled_only(self):
@@ -263,14 +264,13 @@ class NoiseFilterTest(unittest.TestCase):
         她做过的事她得知道 —— 哪怕还没跟他讲过。那条是"可以聊的素材"，
         不是要藏起来的隐私（2026-10-29 修过一次方向错误）。
         """
-        from datetime import datetime as _dt
-
+        
         at = "2026-10-29T11:00:00"
         self.home.append_jsonl("life/life.jsonl", {
-            "at": at, "epoch": 1793263600, "id": life._id(_dt.fromisoformat(at), "刷了抖音"),
+            "at": at, "epoch": 1793263600, "id": life._id(datetime.fromisoformat(at), "刷了抖音"),
             "kind": "bili", "title": "刷了抖音", "shared": False, "detail": "",
         })
-        text = ctx_mod.compose(self.home).text
+        text = ctx_mod.compose(self.home, now=datetime(2026, 10, 29, 12, 0)).text
         self.assertIn("刷了抖音", text, "她自己做过的事必须在上下文里")
         self.assertIn("可以聊", text, "没讲过的事要标出来，她才知道能提")
 
@@ -279,7 +279,7 @@ class NoiseFilterTest(unittest.TestCase):
         from companion import opinion as op
 
         op.add(self.home, "这个游戏应该不错吧", tags=["测试"], confidence=0.3)
-        text = ctx_mod.compose(self.home).text
+        text = ctx_mod.compose(self.home, now=datetime(2026, 10, 29, 12, 0)).text
         self.assertNotIn("这个游戏应该不错吧", text)
 
 
@@ -308,7 +308,7 @@ class OwnerCardTest(unittest.TestCase):
     def test_card_shows_up_in_context(self):
         """建了卡，上下文里就该有他 —— 她要知道在跟谁说话。"""
         react.react(self.home, said="在呢。", person="owner")
-        text = ctx_mod.compose(self.home).text
+        text = ctx_mod.compose(self.home, now=datetime(2026, 10, 29, 12, 0)).text
         self.assertIn("owner", text)
 
 
