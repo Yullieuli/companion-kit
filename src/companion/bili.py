@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import html
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -32,6 +33,21 @@ CONFIG = "bili/config.json"
 CACHE = "bili/search_cache.json"
 
 BV_RE = re.compile(r"BV[0-9A-Za-z]{10}")
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _clean_title(raw: Any) -> str:
+    """标题去脏：剥搜索接口的高亮标签、还原 HTML 实体、压空白。
+
+    B 站 search 返回的标题带高亮标记，形如
+    ``为什么它这么"难产"？硬核拆解<em class="keyword">RGB</em> Mini-LED``。
+    只走 popular/related 时碰不到这种，改成按口味搜索之后每条都带。
+    不剥的话她读到的是带标签的脏标题，写进 life 还会污染后面所有统计
+    （打分按 blob 匹配、character 按 tags 聚合都会吃到）。
+    """
+    s = _TAG_RE.sub("", str(raw or ""))
+    s = html.unescape(s)
+    return re.sub(r"\s+", " ", s).strip()
 
 # 给模型看的来源名，写英文她读起来要多想一步
 SRC_LABEL = {
@@ -171,7 +187,7 @@ def normalize(item: dict[str, Any], src: str = "") -> dict[str, Any]:
     dur = _seconds(item.get("duration") or item.get("duration_text") or item.get("length"))
     return {
         "bvid": bvid,
-        "title": re.sub(r"\s+", " ", str(item.get("title") or "")).strip(),
+        "title": _clean_title(item.get("title")),
         "up": str(up or "").strip(),
         "duration": dur,
         "view": int(stat.get("view") or stat.get("play") or item.get("play") or 0),

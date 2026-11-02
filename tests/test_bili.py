@@ -90,6 +90,16 @@ class NormalizeTest(Base):
     def test_requires_bvid(self):
         self.assertEqual(bili.normalize({"title": "x"}), {})
 
+    def test_strips_search_highlight_tags(self):
+        # 搜索接口的标题带 <em class="keyword">，不剥就是脏数据
+        got = bili.normalize({"bvid": "BV1xx411c7mQ",
+                              "title": '硬核拆解<em class="keyword">RGB</em> Mini-LED'})
+        self.assertEqual(got["title"], "硬核拆解RGB Mini-LED")
+
+    def test_unescapes_html_entities(self):
+        got = bili.normalize({"bvid": "BV1xx411c7mQ", "title": "A&amp;B &quot;C&quot;"})
+        self.assertEqual(got["title"], 'A&B "C"')
+
     def test_duration_forms(self):
         self.assertEqual(bili._seconds("12:34"), 754)
         self.assertEqual(bili._seconds("1:02:03"), 3723)
