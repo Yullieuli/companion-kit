@@ -550,6 +550,33 @@ class QuotaLedgerTest(unittest.TestCase):
         self.assertEqual(quota.bucket_used(self.home.quota(), "share", NOW), 1)
 
 
+class SourceWeightTest(Base):
+    """她自己搜的，必须压过平台推的。
+
+    2026-11-02：候选池 82% 是热门/排行，打分又不看来源，
+    于是四条全是被推上来的同一部作品。
+    """
+
+    def test_search_beats_popular_by_three(self):
+        cfg = bili.config(self.home)
+        t = "RTX 5090 深度评测"
+        pop = bili.score(item("BV1xx411c7m1", t, src="popular"), cfg, self.home)
+        sea = bili.score(item("BV1xx411c7m2", t, src="search"), cfg, self.home)
+        self.assertEqual(sea - pop, 3)
+
+    def test_dynamic_and_related_get_one(self):
+        cfg = bili.config(self.home)
+        pop = bili.score(item("BV1xx411c7m1", "某片", src="popular"), cfg, self.home)
+        for src in ("dynamic", "related"):
+            self.assertEqual(
+                bili.score(item("BV1xx411c7m%d" % len(src), "某片", src=src), cfg, self.home) - pop, 1)
+
+    def test_ranking_is_no_longer_a_feed(self):
+        cfg = bili.config(self.home)
+        self.assertNotIn("ranking", cfg["feeds"])
+        self.assertIn("popular", cfg["feeds"])
+
+
 class SeriesDedupTest(Base):
     """同一部作品的第二支片子，48 小时内不再给。
 

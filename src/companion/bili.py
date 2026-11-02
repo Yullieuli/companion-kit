@@ -45,7 +45,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "min_gap_min": 90,
     "min_score": 2,
     "duration": {"min_min": 3, "max_min": 45},
-    "feeds": ["popular", "ranking", "related", "dynamic"],
+    # 2026-11-02 去掉 ranking：它和 popular 返回的都是「全站最热」，
+    # 一百条里大半重复，等于把"平台推的"算了两遍，把候选池灌成 82% 都是热榜内容。
+    "feeds": ["popular", "related", "dynamic"],
     "deep_read_chars": 1200,
     "frames": "auto",          # auto = 只有深读且时长 ≥8 分钟才抽帧（贵、慢）
     "search_cache_min": 10,    # 同一关键词 10 分钟内复用（读额度只有 3000/天）
@@ -397,6 +399,13 @@ def hype_penalty(title: str) -> int:
     return n
 
 
+# 来源权重：她自己搜的 > 关注的人 / 上一条的相关 > 平台推的。
+# 2026-11-02 实测：候选池里 82% 是热门/排行，打分又不看来源，
+# 于是她一天刷的四条全是被推上来的同一部作品。
+# search 给 3，等于多命中一个口味词——她主动搜的方向应该压过平台塞的。
+SRC_BONUS = {"search": 3, "dynamic": 1, "related": 1, "popular": 0, "ranking": 0, "": 0}
+
+
 def score(item: dict[str, Any], cfg: dict[str, Any], home: Home) -> int:
     blob = f"{item.get('title', '')} {item.get('up', '')}".lower()
     n = 0
@@ -415,6 +424,7 @@ def score(item: dict[str, Any], cfg: dict[str, Any], home: Home) -> int:
         n -= 1
     n += opinion_bonus(home, blob)
     n += hype_penalty(str(item.get("title") or ""))
+    n += SRC_BONUS.get(str(item.get("src") or ""), 0)
     return n
 
 
@@ -482,7 +492,7 @@ def gather(net: Any, cfg: dict[str, Any], *, last_bvid: str = "",
             out += [normalize(x, "dynamic") for x in net.dynamics()]
         except Exception as e:
             notes.append(f"动态失败:{type(e).__name__}")
-    for kw in (keywords or [])[:2]:  # 两个词够了：每个词有缓存，且读额度只有 3000/天
+    for kw in (keywords or [])[:3]:  # 三个词：一天最多刷四次，读额度离 3000 还差很远
         try:
             if home is None:
                 hits = net.search(kw)
