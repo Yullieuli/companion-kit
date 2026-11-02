@@ -602,6 +602,12 @@ class SeriesDedupTest(Base):
         # 「深度评测」这种结构词不能当作品名，否则两个不同显卡会被判成同系列
         self.assertEqual(bili._series_of("RTX 5090 深度评测", {"影之刃零"}), "")
 
+    def test_known_series_wins_over_a_long_book_title(self):
+        # 实测踩到的反例：书名号里是一整句话，真正作品名在句子中间。
+        # 先取《》就会拿到那句话，和 known 对不上，去重直接失效。
+        self.assertEqual(
+            bili._series_of("《除了战斗，影之刃零还能玩到什么？》", {"影之刃零"}), "影之刃零")
+
     def test_watched_series_only_from_last_48h(self):
         life.record(self.home, "刷B站，看了《《影之刃零》游民评测》（UP：某UP，10分0秒）",
                     kind="watch", at=NOW - timedelta(hours=60), extra={"bvid": "BV1xx411c7m1"})

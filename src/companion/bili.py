@@ -319,22 +319,21 @@ def _unwrap_life_title(raw: str) -> str:
 def _series_of(title: str, known: set[str]) -> str:
     """这条片子属于哪个作品。
 
-    先看《》：标题里带书名号的基本都是作品名（游戏、纪录片、剧集）。
-    没有书名号时，退一步看有没有已登记的作品名直接出现在标题里
-    （「【狗蛋的游戏评测】影之刃零—破局」这种不写书名号的写法）。
+    先认已知作品名，再退回《》里的内容 —— 顺序不能反。
+    反例（2026-11-02 实测踩到）：《除了战斗，影之刃零还能玩到什么？》
+    书名号里装的是一整句话，真正指向的作品是句子中间的「影之刃零」。
+    先取《》就会拿到那句话，和 known 里的「影之刃零」对不上，去重直接失效。
 
-    为什么不用 n-gram 相似度：试过，"RTX 5090 深度评测"和"Lunar Lake 深度评测"
-    会共用"深度评测"这类结构词，2 个共同片段就把两个完全不同的片子判成同系列。
+    为什么不用 n-gram 相似度：「RTX 5090 深度评测」和「Lunar Lake 深度评测」
+    会共用「深度评测」这类结构词，2 个共同片段就把两部完全不同的片子判成同系列。
     作品名是离散的标识，比模糊相似度可靠。
     """
-    m = _BOOK.search(str(title or ""))
-    if m:
-        return m.group(1).strip()
     t = str(title or "")
     for k in known:
         if k and k in t:
             return k
-    return ""
+    m = _BOOK.search(t)
+    return m.group(1).strip() if m else ""
 
 
 def watched_series(home: Home, *, hours: float = 48,
@@ -863,7 +862,7 @@ def tick(home: Home, *, net: Any = None, cfg: dict[str, Any] | None = None,
     if _pool:
         import random as _random
 
-        keywords = _random.sample(_pool, min(2, len(_pool)))
+        keywords = _random.sample(_pool, min(3, len(_pool)))
     if not keywords:
         # 观点还没成形时用口味词兜底。否则搜索入口永远空着，她只能一直刷
         # 热门/排行，兴趣永远长不出新方向——2026-10-31 实测就是这个状态。
