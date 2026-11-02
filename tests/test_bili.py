@@ -559,6 +559,15 @@ class QuotaLedgerTest(unittest.TestCase):
         self.assertTrue(out["ok"], out)
         self.assertEqual(quota.bucket_used(self.home.quota(), "share", NOW), 1)
 
+    def test_share_threshold_is_reachable(self):
+        # 13 是照早期打分定的，后来的片子最高才 10 分 —— 那道门槛一条都过不去。
+        # 锁住 9，别被改回一个永远达不到的数。
+        cfg = bili.config(self.home)
+        self.assertEqual(int(cfg["share"]["min_score"]), 9)
+        ok = bili.share_gate(self.home, "BV1xx411c7mQ", score_v=10,
+                             reason="讲透了为什么", cfg=cfg, now=NOW)
+        self.assertTrue(ok["ok"], ok)
+
 
 class SourceWeightTest(Base):
     """她自己搜的，必须压过平台推的。

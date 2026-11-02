@@ -67,7 +67,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "deep_read_chars": 1200,
     "frames": "auto",          # auto = 只有深读且时长 ≥8 分钟才抽帧（贵、慢）
     "search_cache_min": 10,    # 同一关键词 10 分钟内复用（读额度只有 3000/天）
-    "share": {"max_per_day": 2, "min_score": 13, "same_days": 7, "via": "qq"},
+    # 2026-11-02：门槛从 13 降到 9。13 是照早期打分定的（那时 taste.like 里
+    # 还写着"影之刃"，一条评测能到 11 分），后来分数结构变了门槛没跟着改，
+    # 结果是 35 条看片记录里最高才 10 分，一条都分享不出去。
+    "share": {"max_per_day": 2, "min_score": 9, "same_days": 7, "via": "qq"},
     # 迁移期用：旧 bili-whale 插件的账本还活着，只读它、不写它。
     # 不读就会重演"同一期视频推两次"；写了就成了双写。等旧插件下线，删掉这个键即可。
     "legacy_life": [],
