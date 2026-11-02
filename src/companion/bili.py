@@ -54,7 +54,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # 不读就会重演"同一期视频推两次"；写了就成了双写。等旧插件下线，删掉这个键即可。
     "legacy_life": [],
     "taste": {
-        "like": ["极客湾", "影之刃", "独立游戏", "纪录片", "手工", "科普", "拆解", "评测"],
+        # 只放「方向词」和「稳定的 UP 名」，不放具体作品名。
+        # 2026-11-02 实测：列表里写着 "影之刃"，等于给整个游戏永久 +3，
+        # 再叠上 "评测" 的 +3、时长的 +2、opinion 里 "影之刃零" 的 +3，
+        # 一条影之刃零评测能到 11 分，而其他方向最高 4 分 —— 永远轮不到别人。
+        # 具体作品的偏好应该长在 opinion / character 里，不该硬编码在打分表。
+        "like": ["极客湾", "独立游戏", "纪录片", "手工", "科普", "拆解", "评测"],
         "dislike": ["营销号", "标题党", "擦边", "搬运", "切片", "合集"],
     },
 }
@@ -298,6 +303,53 @@ def looks_watched(title: str, frags: set[str], need: int = 3,
     return len(grams(title) & frags) >= need
 
 
+_BOOK = re.compile(r"《([^》]{2,40})》")
+# life 里存的是「刷B站，看了《<视频标题>》（UP：<up>，<时长>）」，
+# 不剥掉这层外壳，下面取到的是整条视频名而不是作品名。
+_LIFE_WRAP = re.compile(r"^刷B站，看了《(.*)》（UP：[^）]*）$", re.S)
+
+
+def _unwrap_life_title(raw: str) -> str:
+    m = _LIFE_WRAP.match(str(raw or ""))
+    return m.group(1) if m else str(raw or "")
+
+
+def _series_of(title: str, known: set[str]) -> str:
+    """这条片子属于哪个作品。
+
+    先看《》：标题里带书名号的基本都是作品名（游戏、纪录片、剧集）。
+    没有书名号时，退一步看有没有已登记的作品名直接出现在标题里
+    （「【狗蛋的游戏评测】影之刃零—破局」这种不写书名号的写法）。
+
+    为什么不用 n-gram 相似度：试过，"RTX 5090 深度评测"和"Lunar Lake 深度评测"
+    会共用"深度评测"这类结构词，2 个共同片段就把两个完全不同的片子判成同系列。
+    作品名是离散的标识，比模糊相似度可靠。
+    """
+    m = _BOOK.search(str(title or ""))
+    if m:
+        return m.group(1).strip()
+    t = str(title or "")
+    for k in known:
+        if k and k in t:
+            return k
+    return ""
+
+
+def watched_series(home: Home, *, hours: float = 48,
+                   now: datetime | None = None) -> set[str]:
+    """48 小时内看过的作品名（《》里的内容，已剥掉 life 的外层包装）。"""
+    now = now or datetime.now()
+    cut = now.timestamp() - hours * 3600
+    out: set[str] = set()
+    for r in home.read_jsonl("life/life.jsonl", limit=100000):
+        if float(r.get("epoch") or 0) < cut:
+            continue
+        m = _BOOK.search(_unwrap_life_title(r.get("title") or ""))
+        if m:
+            out.add(m.group(1).strip())
+    return out
+
+
 def pending_share(home: Home, *, days: float = 3, now: datetime | None = None) -> int:
     """看完还没给他的条数。这是"分享"这个动作唯一诚实的燃料。"""
     now = now or datetime.now()
@@ -449,6 +501,11 @@ def pick(items: list[dict[str, Any]], home: Home, st: dict[str, Any], cfg: dict[
     """去重 → 打分 → 选一条。选不出来就诚实地说选不出来。"""
     now = now or datetime.now()
     seen_bv, seen_frag, seen_cores = watched(home, hours=72, now=now, cfg=cfg)
+    # 同一部作品 48 小时内只给一条。
+    # 72h 的 looks_watched 要 3 个共同 3-gram，「影之刃零 最终预告」和
+    # 「影之刃零 游民评测」只重合「影之刃」「之刃零」两个，刚好卡在阈值下面，
+    # 于是同一个游戏能一天连刷四条。这里按作品名（《》里的内容）硬去重。
+    seen_series = watched_series(home, hours=48, now=now)
     served_cut = now.timestamp() - 24 * 3600
     fresh: list[dict[str, Any]] = []
     for it in items:
@@ -457,6 +514,10 @@ def pick(items: list[dict[str, Any]], home: Home, st: dict[str, Any], cfg: dict[
         if float((st.get("served", {}).get(it["bvid"]) or {}).get("at") or 0) > served_cut:
             continue
         if looks_watched(it["title"], seen_frag, cores=seen_cores):
+            continue
+        # 48h 内同一部作品的第二支片子：算重复，不给
+        series = _series_of(it["title"], seen_series)
+        if series and series in seen_series:
             continue
         it = {**it, "score": score(it, cfg, home)}
         fresh.append(it)
@@ -474,7 +535,13 @@ def pick(items: list[dict[str, Any]], home: Home, st: dict[str, Any], cfg: dict[
         import random as _random
 
         if _random.random() < 0.2:
-            best = _random.choice(fresh[: min(8, len(fresh))])
+            # 探索必须避开最高分区。fresh 已按分数降序，前几条往往全是同一类高分片，
+            # 在里面随机等于没随机（2026-11-02 实测：连刷四条影之刃零）。
+            # 从第 4 名往后、且分数仍过线的区间里捡一条。
+            floor_score = int(cfg.get("min_score") or 0)
+            mid = [x for x in fresh[3:20] if x["score"] >= floor_score]
+            if mid:
+                best = _random.choice(mid)
     if best["score"] < int(cfg.get("min_score") or 0):
         return {"ok": False, "why": f"没有一条够想看的（最高 {best['score']} 分：{best['title'][:30]}）",
                 "top": fresh[:3]}

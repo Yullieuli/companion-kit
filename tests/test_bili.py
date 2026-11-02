@@ -548,3 +548,54 @@ class QuotaLedgerTest(unittest.TestCase):
                          reason="关卡设计讲透了", cfg=cfg, now=NOW)
         self.assertTrue(out["ok"], out)
         self.assertEqual(quota.bucket_used(self.home.quota(), "share", NOW), 1)
+
+
+class SeriesDedupTest(Base):
+    """同一部作品的第二支片子，48 小时内不再给。
+
+    背景：2026-11-02 实测一天连刷四条影之刃零。原因是 72h 的 looks_watched 要
+    3 个共同 3-gram，而「影之刃零 最终预告」和「影之刃零 游民评测」只重合两个。
+    """
+
+    def test_unwrap_strips_life_wrapper(self):
+        raw = "刷B站，看了《《影之刃零》最终预告》（UP：影之刃零，3分11秒）"
+        self.assertEqual(bili._unwrap_life_title(raw), "《影之刃零》最终预告")
+        # 不是这个格式就原样返回，不能把正常标题吃掉
+        self.assertEqual(bili._unwrap_life_title("别的什么"), "别的什么")
+
+    def test_series_of_reads_book_title(self):
+        self.assertEqual(bili._series_of("《影之刃零》最终预告", set()), "影之刃零")
+
+    def test_series_of_matches_known_without_book_marks(self):
+        # 不写书名号的写法也要认得出来
+        self.assertEqual(
+            bili._series_of("【狗蛋的游戏评测】影之刃零—破局", {"影之刃零"}), "影之刃零")
+
+    def test_generic_words_are_not_a_series(self):
+        # 「深度评测」这种结构词不能当作品名，否则两个不同显卡会被判成同系列
+        self.assertEqual(bili._series_of("RTX 5090 深度评测", {"影之刃零"}), "")
+
+    def test_watched_series_only_from_last_48h(self):
+        life.record(self.home, "刷B站，看了《《影之刃零》游民评测》（UP：某UP，10分0秒）",
+                    kind="watch", at=NOW - timedelta(hours=60), extra={"bvid": "BV1xx411c7m1"})
+        self.assertEqual(bili.watched_series(self.home, now=NOW), set())
+        life.record(self.home, "刷B站，看了《《影之刃零》最终预告》（UP：某UP，3分0秒）",
+                    kind="watch", at=NOW - timedelta(hours=3), extra={"bvid": "BV1xx411c7m2"})
+        self.assertEqual(bili.watched_series(self.home, now=NOW), {"影之刃零"})
+
+    def test_second_video_of_same_series_is_skipped(self):
+        life.record(self.home, "刷B站，看了《《影之刃零》游民评测》（UP：某UP，10分0秒）",
+                    kind="watch", at=NOW - timedelta(hours=3), extra={"bvid": "BV1xx411c7m1"})
+        pool = [item("BV1xx411c7m2", "《影之刃零》最终预告"),
+                item("BV1xx411c7m3", "手工：筋角弓从零做起，全程三个月")]
+        got = bili.pick(pool, self.home, bili.load(self.home), bili.config(self.home), now=NOW)
+        self.assertTrue(got["ok"])
+        self.assertEqual(got["item"]["bvid"], "BV1xx411c7m3")
+
+    def test_different_series_still_allowed(self):
+        life.record(self.home, "刷B站，看了《《影之刃零》游民评测》（UP：某UP，10分0秒）",
+                    kind="watch", at=NOW - timedelta(hours=3), extra={"bvid": "BV1xx411c7m1"})
+        pool = [item("BV1xx411c7m4", "《赛博朋克2077》新资料片评测")]
+        got = bili.pick(pool, self.home, bili.load(self.home), bili.config(self.home), now=NOW)
+        self.assertTrue(got["ok"])
+        self.assertEqual(got["item"]["bvid"], "BV1xx411c7m4")
