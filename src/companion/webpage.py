@@ -242,9 +242,12 @@ def cache_get(home: Home, url: str, *, ttl: int = DEFAULT_TTL,
     if not row:
         return None
     age = now - float(row.get("at") or 0)
+    # 边界用严格小于：ttl=0 的语义是「立刻过期」，而 Windows 的 time.time()
+    # 精度约 15ms，同一毫秒内写完再读，age 会正好等于 0 —— 用 <= 就会把刚写进去的
+    # 缓存判成新鲜（2026-11-05 CI 上 windows+py3.10 这一格因此红过）。
     return {"url": row.get("url"), "summary": row.get("summary") or "",
             "text": row.get("text") or "", "age": round(age, 1),
-            "fresh": age <= ttl, "hits": int(row.get("hits") or 0)}
+            "fresh": age < ttl, "hits": int(row.get("hits") or 0)}
 
 def cache_put(home: Home, url: str, *, summary: str = "", text: str = "",
               now: float | None = None) -> dict[str, Any]:
