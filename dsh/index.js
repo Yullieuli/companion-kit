@@ -15,6 +15,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { PANEL_HTML } from './panel.js'
 
 // 包内自带的 Python 源码目录：宿主机没 pip 装过也能跑（只要有 python3.10+）
 const PKG_SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src')
@@ -448,6 +449,45 @@ export default {
           }
         },
       }))
+
+      // 面板：同一套 webServer，但吐 HTML 而不是 JSON。
+      // DSH 没有 dashboard 那种「插件 tab」注册点，所以面板走独立 URL：
+      // 打开 <DSH web 地址>/dsh-companion/ui 就是这个页面。
+      const regHtml = (p, fn) => ctx.effect(() => webServer.register({
+        kind: 'exact',
+        path: p,
+        handler: async (req, res) => {
+          try {
+            const html = await fn(req)
+            res.setHeader('content-type', 'text/html; charset=utf-8')
+            res.setHeader('cache-control', 'no-store')
+            res.end(html)
+          } catch (e) {
+            res.statusCode = 500
+            res.setHeader('content-type', 'text/plain; charset=utf-8')
+            res.end('panel error: ' + String(e && e.message))
+          }
+        },
+      }))
+
+      regHtml('/dsh-companion/ui', () => PANEL_HTML())
+
+      const limitOf = (req, dflt) => {
+        try {
+          const q = new URL(String((req && req.url) || ''), 'http://localhost').searchParams
+          const n = Number(q.get('limit')) || dflt
+          return String(Math.max(1, Math.min(50, n)))
+        } catch {
+          return String(dflt)
+        }
+      }
+
+      // /dsh-companion/status 已由下面的原实现提供（返回 {status, cost, home}），
+      // 这里不再重复注册——同一个 path 注册两次行为依赖加载顺序，属于隐患。
+      reg('/dsh-companion/mood', () => runJson(['mood']))
+      reg('/dsh-companion/life', (req) => runJson(['life', '--limit', limitOf(req, 10)]))
+      reg('/dsh-companion/turns', (req) => runJson(['turns', '--limit', limitOf(req, 10)]))
+
       reg('/dsh-companion/context', async (req) => {
         // 带 session 就是增量投影：状态没变返回空文本，这一轮不用注入。
         // 不带 session 就是全量——老调用方不受影响。

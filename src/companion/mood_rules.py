@@ -31,14 +31,14 @@ from .store import Home
 DAILY = "mood/daily.json"
 
 # 每天最多能推动多少（绝对值）。energy 是负数，所以用负值表示"最多掉这么多"。
-CAP_PER_DAY = {"closeness": 8.0, "satisfaction": 10.0, "energy": -6.0}
+CAP_PER_DAY = {"closeness": 20.0, "satisfaction": 30.0, "energy": -6.0}
 
 # 事件 → 推力。加事件就加一行，调用点只写事件名。
 RULES: dict[str, dict[str, float]] = {
-    "turn": {"closeness": 0.6, "energy": -0.2},
-    "return_after_silence": {"satisfaction": 3.0, "closeness": 1.0},
-    "watched": {"satisfaction": 1.5},
-    "shared": {"satisfaction": 2.0},
+    "turn": {"closeness": 1.5, "satisfaction": 1.0, "energy": -0.2},
+    "return_after_silence": {"satisfaction": 8.0, "closeness": 3.0},
+    "watched": {"satisfaction": 5.0},
+    "shared": {"satisfaction": 4.0},
 }
 
 SILENCE_HOURS = 12.0
@@ -150,3 +150,109 @@ def snapshot(home: Home, now: datetime | None = None) -> dict[str, Any]:
     st = mood_mod.decay(home.mood(), now)
     return {"label": st.get("label"), "axes": st.get("axes"), "left_today": left,
             "rules": sorted(RULES)}
+
+# ── 配置层覆盖（settings.json，缺省回落上面的常量）──────────────
+from . import settings as _settings
+CAP_PER_DAY = _settings.section("mood_caps", CAP_PER_DAY)
+
+# RULES 是嵌套结构（事件 → 轴 → 数值），settings.section 只处理扁平 dict，这里单独合并。
+_over = _settings.raw().get("mood_rules")
+if isinstance(_over, dict):
+    for _ev, _axes in _over.items():
+        if _ev in RULES and isinstance(_axes, dict):
+            for _ax, _val in _axes.items():
+                if _ax in RULES[_ev]:
+                    try:
+                        RULES[_ev][_ax] = float(_val)
+                    except (TypeError, ValueError):
+                        continue
+
+# ── 环境事件：没有具体触发者，时间本身带的情绪 ──────────────────
+# 为什么单独一套：RULES 是「有人做了某事」的推力，走过 nudge 的每日额度；
+# 这些是「什么都没发生」的结果，不该占用说话/刷片的额度，也不该被 _clip 拦。
+IGNORE_HOURS = 4.0       # 她说完话多久没人接，算被冷落
+ABSENCE_DAYS = 3.0       # 多久没见，算「很久」
+NIGHT_START = 23         # 深夜起点
+NIGHT_END = 5            # 深夜终点
+
+AMBIENT = {
+    "ignored": {"satisfaction": -3.0},
+    "long_absence": {"closeness": -1.0},
+    "late_night": {"energy": -2.0},
+}
+
+AMBIENT_WHY = {
+    "ignored": "说了话，半天没人应",
+    "long_absence": "好几天没见到人",
+    "late_night": "这么晚还醒着",
+}
+
+
+def _apply_ambient(home: Home, event: str, now: datetime) -> dict[str, Any]:
+    before = mood_mod.decay(home.mood(), now)
+    after = mood_mod.apply_delta(before, AMBIENT[event], why=AMBIENT_WHY[event], now=now)
+    home.save_json("mood/state.json", after)
+    return after
+
+
+def ambient(home: Home, now: datetime | None = None) -> dict[str, Any]:
+    """每轮 tick 检查一次：被冷落 / 很久没见 / 深夜。每种每天最多一次。"""
+    now = now or datetime.now()
+    day = now.date().isoformat()
+    book = home.read_json("mood/ambient.json", {}) or {}
+    if book.get("day") != day:
+        book = {"day": day, "done": {}}
+    done = book.setdefault("done", {})
+    hits: list[str] = []
+
+    owner = home.read_json("people/owner.json", {}) or {}
+    last_seen = str(owner.get("last_seen") or "")
+
+    # 被冷落：她最后一句说出去超过 IGNORE_HOURS，且这之后他没来过
+    if "ignored" not in done:
+        rows = home.read_jsonl("logs/said.jsonl", limit=1)
+        if rows:
+            try:
+                at = datetime.fromisoformat(str(rows[-1].get("at")))
+                resp = datetime.strptime(last_seen, "%Y-%m-%d %H:%M") if last_seen else None
+                if (now - at).total_seconds() / 3600.0 >= IGNORE_HOURS and (resp is None or resp <= at):
+                    _apply_ambient(home, "ignored", now)
+                    done["ignored"] = True
+                    hits.append("ignored")
+            except Exception:
+                pass
+
+    # 很久没见：不是「他没回她」，是「他压根没出现」
+    if "long_absence" not in done and last_seen:
+        try:
+            resp = datetime.strptime(last_seen, "%Y-%m-%d %H:%M")
+            if (now - resp).days >= ABSENCE_DAYS:
+                _apply_ambient(home, "long_absence", now)
+                done["long_absence"] = True
+                hits.append("long_absence")
+        except Exception:
+            pass
+
+    # 深夜还醒着：精力往下掉
+    if "late_night" not in done and (now.hour >= NIGHT_START or now.hour < NIGHT_END):
+        _apply_ambient(home, "late_night", now)
+        done["late_night"] = True
+        hits.append("late_night")
+
+    if hits:
+        home.save_json("mood/ambient.json", book)
+    return {"ok": True, "applied": hits, "day": day}
+
+IGNORE_HOURS = _settings.number("mood_rules", "ignore_hours", IGNORE_HOURS)
+ABSENCE_DAYS = _settings.number("mood_rules", "absence_days", ABSENCE_DAYS)
+
+_amb = _settings.raw().get("ambient")
+if isinstance(_amb, dict):
+    for _ev, _axes in _amb.items():
+        if _ev in AMBIENT and isinstance(_axes, dict):
+            for _ax, _val in _axes.items():
+                if _ax in AMBIENT[_ev]:
+                    try:
+                        AMBIENT[_ev][_ax] = float(_val)
+                    except (TypeError, ValueError):
+                        continue

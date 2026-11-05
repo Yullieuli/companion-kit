@@ -199,6 +199,13 @@ def _tick_unlocked(
         free_time_used=free_time_used,
         hours_since_free=hours_since_free,
     )
+    # 环境事件先结算：她这段时间是「被冷落 / 很久没见 / 深夜」中的哪一种，
+    # 都会影响这一轮决策时看到的 mood。
+    try:
+        ambient_result = mood_rules.ambient(home, now=now)
+    except Exception:
+        ambient_result = {"applied": []}
+
     decision = initiative.decide(situation, rnd)
 
     event = None

@@ -75,12 +75,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # 不读就会重演"同一期视频推两次"；写了就成了双写。等旧插件下线，删掉这个键即可。
     "legacy_life": [],
     "taste": {
-        # 只放「方向词」和「稳定的 UP 名」，不放具体作品名。
-        # 2026-11-02 实测：列表里写着 "影之刃"，等于给整个游戏永久 +3，
-        # 再叠上 "评测" 的 +3、时长的 +2、opinion 里 "影之刃零" 的 +3，
-        # 一条影之刃零评测能到 11 分，而其他方向最高 4 分 —— 永远轮不到别人。
-        # 具体作品的偏好应该长在 opinion / character 里，不该硬编码在打分表。
-        "like": ["极客湾", "独立游戏", "纪录片", "手工", "科普", "拆解", "评测"],
+        # 2026-11-05 清空重建：只留泛方向，不留具体 UP 名和作品名。
+        # 之前的 "极客湾" + "评测" + "拆解" 三个词叠在一起，把搜索结果锁死在
+        # 硬件评测上；"影之刃" 又锁在一个游戏上。具体喜欢谁应该在 opinion /
+        # character 里长出来，不该硬编码在打分表。
+        "like": ["纪录片", "手工", "科普", "独立游戏"],
         "dislike": ["营销号", "标题党", "擦边", "搬运", "切片", "合集"],
     },
 }
@@ -889,7 +888,7 @@ def tick(home: Home, *, net: Any = None, cfg: dict[str, Any] | None = None,
         if likes:
             import random as _random
 
-            keywords = [_random.choice(likes)]
+            keywords = _random.sample(likes, min(3, len(likes)))
     if net is None:
         from .bilinet import Net
         net = Net(home.root)

@@ -229,3 +229,7 @@ def summary(home, now: datetime | None = None, budget: dict[str, Any] | None = N
 def cheapest_first(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """同样收益时，先选便宜的那个。给自主决策用。"""
     return sorted(candidates, key=lambda c: (float(c.get("score", 0)) / max(1e-6, float(c.get("cost", 0)))), reverse=True)
+
+# ── 配置层覆盖（settings.json，缺省回落上面的常量）──────────────
+from . import settings as _settings
+DEFAULT_BUDGET = _settings.section("cost", DEFAULT_BUDGET)

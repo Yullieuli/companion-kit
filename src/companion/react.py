@@ -137,6 +137,33 @@ def _react_unlocked(
             changed.append("mood_shift")
 
     if person:
+        # 聊天本身就该有情绪反馈：先记下上次见面的间隔（touch 会覆盖 last_seen），
+        # 再决定是普通对话还是久别重逢。宿主没传 mood_delta 时才走这条，避免双写。
+        _prev = people.get(home, person)
+        _gap_h = 0.0
+        if _prev and _prev.last_seen:
+            try:
+                _then = datetime.strptime(_prev.last_seen, "%Y-%m-%d %H:%M")
+                _gap_h = max(0.0, (now - _then).total_seconds() / 3600.0)
+            except Exception:
+                _gap_h = 0.0
+        if not mood_delta:
+            try:
+                from . import mood_rules as _mood_rules
+                _mood_rules.on_turn(home, gap_hours=_gap_h, now=now)
+                changed.append("mood_turn")
+            except Exception:
+                pass
+        # 好感度：每轮 +0.2，封顶 100。owner.json 的 closeness 以前是死值 20，
+        # 因为没有任何调用方传过它。
+        if _prev and float(_prev.closeness or 0) < 100:
+            try:
+                people.upsert(home, person,
+                              closeness=min(100.0, float(_prev.closeness or 0) + 0.2))
+                changed.append("closeness")
+            except Exception:
+                pass
+
         # 给了 person 就该建卡，哪怕 facts 是空的。
         # 之前要 facts 非空才建，导致"主人从没说过话 → 人物卡永远不存在"
         # → 上下文里没有他是谁 → 她答非所问。

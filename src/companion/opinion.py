@@ -269,3 +269,7 @@ def stats(home: Home) -> dict[str, Any]:
         "retired": sum(1 for o in items if o.stage == "retired"),
         "avg_confidence": round(sum(o.confidence for o in items) / len(items), 3) if items else 0.0,
     }
+
+# ── 配置层覆盖（settings.json，缺省回落上面的常量）──────────────
+from . import settings as _settings
+MAX_ITEMS = _settings.int_or("opinion", "max_items", MAX_ITEMS)

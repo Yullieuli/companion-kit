@@ -196,3 +196,7 @@ def summary(state: dict[str, Any], cfg: dict[str, Any] | None, now: datetime | N
     days = owner_silent_days(owner_last_seen, now)
     silent = f"，主人已 {int(days)} 天没回" if days >= 1 else ""
     return f"今天开口 {st['count']}/{cap}{silent}"
+
+# ── 配置层覆盖（settings.json，缺省回落上面的常量）──────────────
+from . import settings as _settings
+DEFAULTS = _settings.section("quota", DEFAULTS)

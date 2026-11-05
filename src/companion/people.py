@@ -73,8 +73,9 @@ def get(home: Home, key: str) -> Person | None:
         name=d.get("name", ""),
         aliases=list(d.get("aliases") or []),
         relation=d.get("relation", "朋友"),
-        closeness=int(d.get("closeness", 20)),
-        trust=int(d.get("trust", 50)),
+        # 不能用 int()：好感度按轮次小幅累积（+0.2），读回来被截断就等于没加
+        closeness=float(d.get("closeness", 20)),
+        trust=float(d.get("trust", 50)),
         facts=list(d.get("facts") or []),
         notes=d.get("notes", ""),
         last_seen=d.get("last_seen", ""),
@@ -114,7 +115,9 @@ def upsert(home: Home, key: str, **fields) -> Person:
             setattr(p, k, str(fields[k]))
     for k in ("closeness", "trust"):
         if k in fields and fields[k] is not None:
-            setattr(p, k, max(0, min(100, int(fields[k]))))
+            # 用 float 而不是 int：好感度按轮次小幅累积（+0.2），int() 会把它截成 0
+            v = max(0.0, min(100.0, float(fields[k])))
+            setattr(p, k, round(v, 2) if v % 1 else int(v))
     if fields.get("aliases"):
         p.aliases = sorted({*p.aliases, *map(str, fields["aliases"])})
     if fields.get("facts"):

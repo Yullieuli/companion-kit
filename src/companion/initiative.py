@@ -13,6 +13,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+
+from . import settings as _settings
 from datetime import datetime
 from typing import Any
 
@@ -59,7 +61,7 @@ class Situation:
     bili_due: bool = False           # B 站那边还有额度、也隔够久了
     bili_why: str = ""               # 不 due 的原因（写进日志，方便回看）
     free_time_used: int = 0          # 今天已经给过几次自由时间
-    free_time_max: int = 3           # 一天最多几段（再多就是在刷时长，不是在过日子）
+    free_time_max: int = field(default_factory=lambda: _settings.int_or("initiative", "free_time_max", 3))  # 一天最多几段
     hours_since_free: float = 99.0   # 距上次自由时间多久
 
     extra: dict[str, Any] = field(default_factory=dict)
@@ -91,12 +93,17 @@ def feedback(home: Home) -> dict[str, Any]:
 
 
 def settle(home: Home, *, now: datetime | None = None,
-           window_h: float = SETTLE_HOURS) -> dict[str, Any]:
+           window_h: float | None = None) -> dict[str, Any]:
     """给上一次主动行为结账：他后来接话了吗。
 
     为什么要等：主动说话的"成效"只有一种可观察信号——他回了。
     当场判断不了（人可能十分钟后才看到），所以下一次 tick 回来结账。
+
+    window_h 默认给 None 而不是直接写 SETTLE_HOURS：默认参数在 def 时就求值，
+    模块末尾的配置层覆盖到不了签名里，会变成「面板上调了但不起作用」。
     """
+    if window_h is None:
+        window_h = SETTLE_HOURS
     now = now or datetime.now()
     fb = _feedback(home)
     rows = home.read_jsonl(LOG, limit=1)
@@ -337,3 +344,8 @@ def _single(action: str, why: str, blocked: str) -> dict[str, Any]:
         "blocked": blocked,
         "candidates": [],
     }
+
+# ── 配置层覆盖（settings.json，缺省回落上面的常量）──────────────
+from . import settings as _settings
+MIN_SAMPLES = _settings.int_or("initiative", "min_samples", MIN_SAMPLES)
+SETTLE_HOURS = _settings.number("initiative", "settle_hours", SETTLE_HOURS)

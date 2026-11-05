@@ -317,3 +317,7 @@ def stats(home: Home) -> dict[str, Any]:
                       key=lambda x: -x[1])[:5],
         "updated_at": data.get("updated_at", ""),
     }
+
+# ── 配置层覆盖（settings.json，缺省回落上面的常量）──────────────
+from . import settings as _settings
+HALF_LIFE_DAYS = _settings.number("character", "half_life_days", HALF_LIFE_DAYS)

@@ -14,6 +14,7 @@
   "main": "dsh/index.js",
   "exports": {
     ".": "./dsh/index.js",
+    "./client": "./dsh/client.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -33,6 +34,12 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "slots"
+      ]
     }
   }
 }
