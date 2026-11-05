@@ -19,6 +19,11 @@ jobs:
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
+      # 2026-11-05：ubuntu-latest + py3.12 这一格红过 —— 中文文件名
+      # （测试里造「好困啊.png」）读出来和写进去对不上，关键词识别必然落空。
+      # runner 的 locale 不保证是 UTF-8，显式钉死。
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
     strategy:
       fail-fast: false
       matrix:

@@ -93,7 +93,11 @@ class AutoExtractTest(unittest.TestCase):
         """主人自己命名的最准：文件名说"困"，就归到困，不管像素什么色。"""
         p = _make_png(self.d / "好困啊.png", rgb=(255, 0, 0))   # 像素看着像生气
         out = stickerlib.extract(self.home, p)
-        self.assertEqual(out["mood"], "困")
+        # 断言带上完整来路：CI 上 ubuntu+py3.12 这一格红过，只报 '安慰' != '困'
+        # 看不出是关键词没命中还是像素猜错，把 auto 一起打出来
+        self.assertEqual(out["mood"], "困",
+                         f"auto={out.get('auto')} name={p.name!r} "
+                         f"fsenc={sys.getfilesystemencoding()}")
         self.assertEqual(out["auto"]["mood_from"], "keyword")
 
     def test_pixel_fallback_when_no_keyword(self):
