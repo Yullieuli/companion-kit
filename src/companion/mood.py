@@ -121,7 +121,10 @@ def apply_delta(
 
 
 def decay(state: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
-    """24 小时线性回归 0；停在标签区间边界上。"""
+    """按 DECAY_HOURS 线性滑向 baseline（不是滑向 0）。
+
+    baseline 是长期底色：短期情绪会散，但那几天积累的底子留下来。
+    标签跟着轴走 —— 情绪是滑过去的，不卡在某个档位。"""
     now = now or datetime.now()
     out = copy.deepcopy(state)
     # 衰减基准优先取 decayed_at：decay() 会被 context / drive / mood_rules / cli / mcp 反复调用，

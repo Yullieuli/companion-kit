@@ -36,11 +36,15 @@ class Base(unittest.TestCase):
 
 class NudgeTest(Base):
     def test_turn_moves_closeness_and_energy(self):
+        # 用 RULES 里的实际增量算期望，别写死数字 —— 11-03 把 turn 从
+        # 0.6/-0.2/0 调到 1.5/-0.2/1.0，写死的断言当场全红。
         r = mood_rules.on_turn(self.home, now=NOW)
         self.assertTrue(r["ok"])
-        self.assertAlmostEqual(self.axes()["closeness"], 0.6, places=2)
-        self.assertAlmostEqual(self.axes()["energy"], -0.2, places=2)
-        self.assertEqual(self.axes()["satisfaction"], 0)
+        delta = mood_rules.RULES["turn"]
+        ax = self.axes()
+        self.assertAlmostEqual(ax["closeness"], delta["closeness"], places=2)
+        self.assertAlmostEqual(ax["energy"], delta["energy"], places=2)
+        self.assertAlmostEqual(ax["satisfaction"], delta.get("satisfaction", 0.0), places=2)
 
     def test_return_after_silence_adds_a_lift(self):
         mood_rules.on_turn(self.home, gap_hours=1, now=NOW)
@@ -97,8 +101,9 @@ class SnapshotTest(Base):
     def test_snapshot_shows_budget_left(self):
         mood_rules.on_turn(self.home, now=NOW)
         snap = mood_rules.snapshot(self.home, NOW)
+        delta = mood_rules.RULES["turn"]["closeness"]
         self.assertAlmostEqual(snap["left_today"]["closeness"],
-                               mood_rules.CAP_PER_DAY["closeness"] - 0.6, places=2)
+                               mood_rules.CAP_PER_DAY["closeness"] - delta, places=2)
         self.assertIn("turn", snap["rules"])
         self.assertIn("label", snap)
 

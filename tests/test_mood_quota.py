@@ -47,23 +47,38 @@ class MoodTest(unittest.TestCase):
         out = mood.apply_delta(st, {"satisfaction": 8}, "他哄了一句", T0)
         self.assertEqual(out["axes"]["satisfaction"], -32)
 
-    def test_decay_to_zero(self):
+    def test_decay_to_baseline(self):
+        # 11-03 起衰减周期改成 DECAY_HOURS（36 小时），而且目标是 baseline 不是 0。
+        # 按天数算期望，别再写「24 小时必归零」——那个假设已经不成立了。
         st = mood.default_state()
         st["axes"] = {"satisfaction": 10, "closeness": 10, "energy": 10}
         st["label"] = "平静"
         st["last_change"] = (T0 - timedelta(hours=24)).isoformat()
         out = mood.decay(st, T0)
-        self.assertAlmostEqual(out["axes"]["energy"], 0.0, places=1)
-        self.assertAlmostEqual(out["axes"]["satisfaction"], 0.0, places=1)
+        expect = 10 * max(0.0, 1 - 24 / mood.DECAY_HOURS)
+        self.assertAlmostEqual(out["axes"]["energy"], expect, places=1)
+        self.assertAlmostEqual(out["axes"]["satisfaction"], expect, places=1)
+        # 走满一个完整周期才回到底色（默认 0）
+        st["last_change"] = (T0 - timedelta(hours=mood.DECAY_HOURS + 1)).isoformat()
+        done = mood.decay(st, T0)
+        self.assertAlmostEqual(done["axes"]["energy"], 0.0, places=1)
 
-    def test_decay_does_not_cross_band(self):
+    def test_decay_slides_label_with_axes(self):
+        """情绪线性滑向底色，标签跟着轴走 —— 不再「停在区间边界」上。
+
+        11-03 把 decay 改成「衰减到 baseline 而不是 0」之后，原来那条
+        「停在标签区间边界、label 不变」的性质就不存在了。这是有意的：
+        真实情绪是滑过去的，不是卡在某个档位。
+        """
         st = mood.default_state()
         st["axes"] = {"satisfaction": 30, "closeness": 0, "energy": 0}
         st["label"] = "开心"
         st["last_change"] = (T0 - timedelta(hours=24)).isoformat()
         out = mood.decay(st, T0)
-        self.assertAlmostEqual(out["axes"]["satisfaction"], 20.0, places=1)
-        self.assertEqual(out["label"], "开心")
+        self.assertAlmostEqual(out["axes"]["satisfaction"],
+                               30 * max(0.0, 1 - 24 / mood.DECAY_HOURS), places=1)
+        # 30 掉到 10，已经出了「开心」区间
+        self.assertEqual(out["label"], "平静")
 
     def test_history_is_capped(self):
         st = mood.default_state()
