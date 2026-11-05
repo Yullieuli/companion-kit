@@ -89,7 +89,9 @@ def _free_time_pack(n: int, minutes: int = 45) -> str:
 - 可以接着上一段没做完的继续，不用每次从零开始
 - 结束时记一笔 life：做了什么、有什么证据（BV 号 / 路径 / 只有真看过才说得出的细节）
 - 要是形成了判断，写一条 opinion —— 是你能拿去跟人争的看法，不是剧情复述
-- 看片别一帧帧看，先拼九宫格再一次看完（细节不清再单独补那一帧）"""
+- 看片别一帧帧看，先拼九宫格再一次看完（细节不清再单独补那一帧）
+- 碰上真觉得有意思的（屏幕上的一屏、一张图、一段对话），截下来直接发给他：
+  device_look 的返回里带 cq，拿它发就行。只记进 life 他看不见，等于没发生"""
 
 
 def _owner_talked_recently(home, minutes: float = 15.0) -> bool:
@@ -179,6 +181,27 @@ def main() -> int:
             print(f"bili 失败：{type(e).__name__}: {e}", file=sys.stderr)
         return 0
 
+    if action == "sticker":
+        # 「有情绪才发」的动作，所以包里要写清现在的情绪是什么。
+        # 和 sing 同一个坑：只说「想发就发」，她会回一句话就收工（2026-10-31 唱过：
+        # 决策 2 次、voice/ 里 0 个文件）。这里保留"不想发就算了"的选择权，
+        # 但一旦选了就必须走完两步。
+        try:
+            _st = mood.decay(home.mood(), datetime.now())
+            _label = str(_st.get("label") or "平静")
+        except Exception:
+            _label = "平静"
+        print(
+            "WAKE|配张表情|sticker\n\n"
+            f"【表情】你现在是「{_label}」。\n"
+            "手边有 8 类表情：困 / 安慰 / 害羞 / 开心 / 得意 / 无语 / 生气 / 疑惑。\n"
+            "想配一张就配；不想发这条不回也行，不发不算错。\n"
+            "要发就一次做完，只挑不发等于没发：\n"
+            "1. companion_sticker_pick，mood 填你现在的状态（比如「无语」）\n"
+            "2. 把返回值里的 cq 原样发出去，再配一句话——别只丢一张图"
+        )
+        return 0
+
     if action == "free_time":
         # 自由时间：一段完整的、她自己安排的时间。
         # 这是所有动作里唯一「做一件事」而不是「做一个动作」的，所以给的
@@ -202,7 +225,19 @@ def main() -> int:
         return 0
 
     reason = (result.get("why") or "").replace("|", "／")[:60]
-    print(f"WAKE|{reason}|{action}")
+    # 说话的时候手边有张图，是自然的；专门为一张图起会话是别扭的。
+    # 所以配图这件事挂在 speak / share 的唤醒包上：给一句提示，配不配她自己定。
+    # 2026-11-05 之前这里什么都没写 —— 她不知道有表情库，所以一次都没发过。
+    hint = ""
+    if action in ("speak", "share", "voice"):
+        try:
+            from companion import sticker
+
+            if sticker.stats(home).get("total"):
+                hint = "；想配张表情就调 companion_sticker_pick（返回里直接带 CQ 码），不想配就纯文字"
+        except Exception:
+            pass
+    print(f"WAKE|{(reason + hint)[:120]}|{action}")
     return 0
 
 

@@ -37,6 +37,8 @@ COST_EST = {
     "share": 0.035,
     "bili": 0.012,   # 只读一条：一次短会话。刷本身不花 token
     "diary": 0.008,
+    # 挑一张表情 + 半句话。比说话略便宜——她不用组织语言，但还是一次短会话。
+    "sticker": 0.012,
     # 自由时间：一段完整的、她自己安排的时间，通常要读片/抽帧/写观点，
     # 是六个动作里唯一"做一件事"而不是"做一个动作"的，所以估得最贵。
     "free_time": 0.060,
@@ -206,6 +208,19 @@ def _candidates(s: Situation) -> list[Candidate]:
     if low:
         score -= 0.30
     out.append(Candidate("voice", score, "、".join(why) or "想让他听见声音", COST_EST["voice"]))
+
+    # 发表情：情绪本身就是内容。但它是「附属动作」不是「独立任务」——
+    # 专门为了一张图起一次会话很怪，像定时发表情的机器人。
+    # 所以分数压在 diary 下面（0.26）：只有在没话要说、没事可做、
+    # 但情绪明显的时候，才会轮到它。主要路径是说话时顺手配（见 companion_wake）。
+    score = 0.08
+    why = []
+    _label = str((s.mood_state or {}).get("label") or "平静")
+    if _label != "平静":
+        score += 0.18
+        why.append(f"现在{_label}")
+    out.append(Candidate("sticker", score, "、".join(why) or "有张图对得上现在的状态",
+                         COST_EST["sticker"]))
 
     # 唱歌：高精力 + 心情好 + 有些天没唱了。这是"她自己想唱"，不是被点歌
     score = 0.30
