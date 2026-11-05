@@ -22,7 +22,7 @@
 from __future__ import annotations
 
 import os
-import time
+
 from datetime import datetime
 from typing import Any
 
@@ -34,10 +34,8 @@ STALE_MINUTES = 20.0
 # 超过这个小时数没心跳，跨天了就别指望它自己恢复
 DEAD_HOURS = 6.0
 
-
 def _now(now: datetime | None = None) -> datetime:
     return now or datetime.now()
-
 
 def beat(home: Home, host: str = "cli", *, now: datetime | None = None,
          extra: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -54,11 +52,9 @@ def beat(home: Home, host: str = "cli", *, now: datetime | None = None,
     home.save_json(HEARTBEAT, row)
     return row
 
-
 def last_beat(home: Home) -> dict[str, Any]:
     """最后一次心跳（没有就空 dict）。"""
     return home.read_json(HEARTBEAT) or {}
-
 
 def age_minutes(home: Home, *, now: datetime | None = None) -> float:
     """距上次心跳多少分钟。没有心跳 → 999（当作很久没动）。"""
@@ -67,7 +63,6 @@ def age_minutes(home: Home, *, now: datetime | None = None) -> float:
     if not ts:
         return 999.0
     return max(0.0, (_now(now).timestamp() - ts) / 60.0)
-
 
 def alive(pid: int) -> bool:
     """这个 pid 还活着吗。跨平台：Windows 用 OpenProcess，POSIX 用 kill(0)。"""
@@ -106,7 +101,6 @@ def alive(pid: int) -> bool:
     except Exception:
         return False
 
-
 def check(home: Home, *, now: datetime | None = None,
           stale_minutes: float = STALE_MINUTES) -> dict[str, Any]:
     """体检心跳。
@@ -135,7 +129,6 @@ def check(home: Home, *, now: datetime | None = None,
         why = f"{host} {age:.0f} 分钟前还活着"
     return {"ok": state == "alive", "state": state, "age_minutes": round(age, 1),
             "host": host, "pid": pid, "alive": is_alive, "why": why}
-
 
 def stale_hosts(home: Home, *, now: datetime | None = None,
                 stale_minutes: float = STALE_MINUTES) -> list[dict[str, Any]]:

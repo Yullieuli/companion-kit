@@ -133,9 +133,6 @@ class Home:
     def soul(self) -> str:
         return self._text("SOUL.md")
 
-    def memory_index(self) -> str:
-        return self._text("memory/index.md")
-
     def rhythm(self) -> dict[str, Any]:
         return self._json("rhythm.json", DEFAULT_RHYTHM)
 

@@ -42,7 +42,6 @@ from .devwin import (DesktopError, click, drag, focus as focus_window, foregroun
                      screenshot_window, type_text, window_rect, windows as list_windows)
 from .imgpng import _shot_path, write_png
 
-
 LOG = "logs/device.jsonl"
 STATE = "devices.json"
 
@@ -75,7 +74,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "windows": {"python": "", "src": ""},
 }
 
-
 # ── 闸 ─────────────────────────────────────────────────────
 @dataclass
 class Verdict:
@@ -84,7 +82,6 @@ class Verdict:
 
     def as_dict(self) -> dict[str, Any]:
         return {"ok": self.ok, "reason": self.reason}
-
 
 def config(home: Home) -> dict[str, Any]:
     p = home.root / STATE
@@ -108,7 +105,6 @@ def config(home: Home) -> dict[str, Any]:
     out["windows"] = {**DEFAULT_CONFIG["windows"], **(d.get("windows") or {})}
     return out
 
-
 def _state(home: Home) -> dict[str, Any]:
     p = home.root / "logs/device_state.json"
     try:
@@ -116,16 +112,13 @@ def _state(home: Home) -> dict[str, Any]:
     except Exception:
         return {}
 
-
 def _save_state(home: Home, st: dict[str, Any]) -> None:
     p = home.root / "logs/device_state.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
 
-
 def _norm(s: str) -> str:
     return (s or "").strip().lower()
-
 
 def map_point(x: float, y: float, design: tuple[int, int], screen: tuple[int, int]) -> tuple[int, int]:
     """把「设计分辨率下的坐标」换成「当前屏幕坐标」。
@@ -136,7 +129,6 @@ def map_point(x: float, y: float, design: tuple[int, int], screen: tuple[int, in
     dw, dh = max(1, int(design[0])), max(1, int(design[1]))
     sw, sh = max(1, int(screen[0])), max(1, int(screen[1]))
     return int(round(float(x) * sw / dw)), int(round(float(y) * sh / dh))
-
 
 def check(
     home: Home,
@@ -190,7 +182,6 @@ def check(
         return Verdict(False, f"重复动作（{cfg.get('idempotent_seconds')} 秒内），没有再执行一次")
     return Verdict(True)
 
-
 def _mark(home: Home, key: str, now: float) -> None:
     st = _state(home)
     recent = st.get("recent") or {}
@@ -199,26 +190,21 @@ def _mark(home: Home, key: str, now: float) -> None:
     st["recent"][key] = now
     _save_state(home, st)
 
-
 def _log(home: Home, row: dict[str, Any]) -> None:
     home.append_jsonl(LOG, row)
-
 
 def _key(target: str, action: str, args: dict[str, Any]) -> str:
     return hashlib.sha1(f"{target}|{action}|{json.dumps(args, sort_keys=True, ensure_ascii=False)}".encode()).hexdigest()[:16]
 
-
 # ── Android（adb）──────────────────────────────────────────
 class PhoneError(RuntimeError):
     pass
-
 
 def _adb(*args: str, timeout: float = 10) -> subprocess.CompletedProcess:
     exe = shutil.which("adb") or shutil.which("adb.exe")
     if not exe:
         raise PhoneError("找不到 adb（装 platform-tools 或把它放进 PATH）")
     return subprocess.run([exe, *args], capture_output=True, timeout=timeout)
-
 
 def phone_devices() -> list[str]:
     try:
@@ -232,7 +218,6 @@ def phone_devices() -> list[str]:
             out.append(parts[0])
     return out
 
-
 def screenshot_phone(home: Home, *, serial: str = "") -> Path:
     args = (["-s", serial] if serial else []) + ["exec-out", "screencap", "-p"]
     r = _adb(*args)
@@ -243,25 +228,20 @@ def screenshot_phone(home: Home, *, serial: str = "") -> Path:
     p.write_bytes(r.stdout)
     return p
 
-
 def phone_tap(x: int, y: int, *, serial: str = "") -> None:
     _adb(*(["-s", serial] if serial else []), "shell", "input", "tap", str(int(x)), str(int(y)))
-
 
 def phone_swipe(x1: int, y1: int, x2: int, y2: int, ms: int = 300, *, serial: str = "") -> None:
     _adb(*(["-s", serial] if serial else []), "shell", "input", "swipe",
          str(int(x1)), str(int(y1)), str(int(x2)), str(int(y2)), str(int(ms)))
 
-
 def phone_type(text: str, *, serial: str = "") -> None:
     _adb(*(["-s", serial] if serial else []), "shell", "input", "text", text.replace(" ", "%s"))
-
 
 def phone_open(package: str, *, serial: str = "") -> str:
     r = _adb(*(["-s", serial] if serial else []), "shell", "monkey", "-p", package,
              "-c", "android.intent.category.LAUNCHER", "1")
     return (r.stdout or b"").decode("utf-8", "ignore")[-200:]
-
 
 # ── 对外三个动作：看 / 动 / 开 ──────────────────────────────
 def _prune_shots(home: Home, *, keep: int = 60, days: float = 7) -> int:
@@ -284,7 +264,6 @@ def _prune_shots(home: Home, *, keep: int = 60, days: float = 7) -> int:
         except Exception:
             continue
     return removed
-
 
 def look(home: Home, target: str = "desktop", *, serial: str = "",
          window: str = "") -> dict[str, Any]:
@@ -322,11 +301,17 @@ def look(home: Home, target: str = "desktop", *, serial: str = "",
             out["oversize"] = True
             out["hint"] = f"图 {size_kb}KB 超过 {config(home).get('max_screenshot_kb')}KB，进上下文前先缩"
         return out
+    except (BrowserError, DesktopError) as e:
+        # 这两类是真·环境问题（浏览器没开调试端口、窗口没了），
+        # 和"截图中途炸了"不是一回事，给一句能做点什么的话。
+        _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": target,
+                    "action": "look", "ok": False, "reason": str(e)})
+        return {"ok": False, "error": str(e),
+                "hint": "浏览器要先开 CDP 端口，桌面要确认窗口还在（list_windows 看一眼）"}
     except Exception as e:
         _log(home, {"at": datetime.now().isoformat(timespec="seconds"), "target": target,
                     "action": "look", "ok": False, "reason": str(e)})
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
-
 
 def _ask_gate(home: Home, target: str, action: str, args: dict[str, Any],
               ask_id: str = "") -> dict[str, Any] | None:
@@ -348,7 +333,6 @@ def _ask_gate(home: Home, target: str, action: str, args: dict[str, Any],
                 "action": action, "ok": False, "ask_required": True, "ask": req.get("id")})
     return {"ok": False, "ask_required": True, "ask": req, "say": req.get("say"),
             "hint": "先把这句话说出来；主人答应后用 ask_id 重试同一个动作"}
-
 
 def act(
     home: Home,
@@ -460,7 +444,6 @@ def act(
                     "action": action, "ok": False, "reason": str(e)})
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
-
 def open_thing(home: Home, target: str, what: str, *, is_owner: bool = True,
                ask_id: str = "") -> dict[str, Any]:
     args = {"what": what, "url": what, "package": what, "window": what}
@@ -495,7 +478,6 @@ def open_thing(home: Home, target: str, what: str, *, is_owner: bool = True,
                     "action": "open", "what": what, "ok": False, "reason": str(e)})
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
-
 def parse_ocr_tsv(tsv: str, *, min_conf: float = 40) -> dict[str, Any]:
     """把 tesseract 的 TSV 输出按行拼回去。
 
@@ -523,7 +505,6 @@ def parse_ocr_tsv(tsv: str, *, min_conf: float = 40) -> dict[str, Any]:
              for k, v in sorted(rows.items())]
     return {"text": "\n".join(x["text"] for x in lines), "lines": lines}
 
-
 def ocr_bin() -> str:
     """找一个能用的 tesseract。找不到就是没有 —— 不装、不联网下。"""
     found = shutil.which("tesseract") or shutil.which("tesseract.exe")
@@ -535,7 +516,6 @@ def ocr_bin() -> str:
             if Path(cand).exists():
                 return cand
     return ""
-
 
 def ocr_image(home: Home, shot: str | Path, *, lang: str = "") -> dict[str, Any]:
     """读图上的字。没有引擎就老实返回 none，让模型的 vision 接手。"""
@@ -560,10 +540,8 @@ def ocr_image(home: Home, shot: str | Path, *, lang: str = "") -> dict[str, Any]
     return {"backend": "error", "text": "", "lines": [],
             "hint": (done.stderr or "")[:200]}
 
-
 DESCRIBE_HINT = ("先用 ocr.text 回答能读到的内容；读不到再看图。"
                  "画面里出现的文字/按钮/报错，照原样引用，别概括。")
-
 
 def observe(home: Home, target: str = "desktop", *, window: str = "",
             serial: str = "", ocr: bool = True) -> dict[str, Any]:
@@ -584,7 +562,6 @@ def observe(home: Home, target: str = "desktop", *, window: str = "",
                 "window": window or "", "ocr": (out.get("ocr") or {}).get("backend")})
     return out
 
-
 def windows_list(home: Home, limit: int = 30) -> dict[str, Any]:
     """列可见窗口。只读标题，不过闸 —— 但也不给句柄之外的任何能力。"""
     try:
@@ -594,7 +571,6 @@ def windows_list(home: Home, limit: int = 30) -> dict[str, Any]:
         return {"ok": True, "windows": rows, "foreground": foreground()}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
-
 
 def focus_window_by(home: Home, what: str, *, is_owner: bool = True,
                     ask_id: str = "") -> dict[str, Any]:
@@ -609,7 +585,6 @@ def focus_window_by(home: Home, what: str, *, is_owner: bool = True,
         return blocked
     return _focus_apply(home, what)
 
-
 def _focus_apply(home: Home, what: str) -> dict[str, Any]:
     """真正去切窗口。不含闸 —— 调用方负责过闸，避免一处动作问两遍。"""
     try:
@@ -622,9 +597,7 @@ def _focus_apply(home: Home, what: str) -> dict[str, Any]:
                     "action": "focus", "what": what, "ok": False, "reason": str(e)})
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
-
 REPLAYABLE = {"tap", "click", "swipe", "type", "key", "focus", "open"}
-
 
 def replay(home: Home, last: int = 5, *, execute: bool = False, with_text: bool = False,
            is_owner: bool = True) -> dict[str, Any]:
@@ -677,7 +650,6 @@ def replay(home: Home, last: int = 5, *, execute: bool = False, with_text: bool 
                      "after": out.get("after"), "error": out.get("error")})
     return {"ok": all(x.get("ok") or x.get("skipped") for x in done),
             "dry_run": False, "steps": done}
-
 
 def log_tail(home: Home, n: int = 20) -> list[dict[str, Any]]:
     return home.read_jsonl(LOG, limit=n)

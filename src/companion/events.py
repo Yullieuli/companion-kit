@@ -13,14 +13,12 @@
 
 from __future__ import annotations
 
-import json
 import time
 from datetime import datetime
 from typing import Any
 
 EVENTS = "logs/events.jsonl"
 CURSOR = "logs/.cursor"
-
 
 def emit(home, kind: str, now: datetime | None = None, **payload: Any) -> dict[str, Any]:
     now = now or datetime.now()
@@ -33,10 +31,8 @@ def emit(home, kind: str, now: datetime | None = None, **payload: Any) -> dict[s
     home.append_jsonl(EVENTS, evt)
     return evt
 
-
 def read_all(home) -> list[dict[str, Any]]:
     return home.read_jsonl(EVENTS, limit=100000)
-
 
 def cursor(home) -> int:
     try:
@@ -44,12 +40,10 @@ def cursor(home) -> int:
     except Exception:
         return 0
 
-
 def save_cursor(home, value: int) -> None:
     p = home.root / CURSOR
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(str(int(value)), encoding="utf-8")
-
 
 def poll(home, since: int | None = None, advance: bool = True) -> tuple[list[dict[str, Any]], int]:
     """返回 (新事件, 新 cursor)。since 不传就沿用文件里存的。
@@ -64,7 +58,6 @@ def poll(home, since: int | None = None, advance: bool = True) -> tuple[list[dic
     if advance and since is None:
         save_cursor(home, new_cursor)
     return fresh, new_cursor
-
 
 def wait(home, timeout: float = 10.0, interval: float = 0.5, since: int | None = None):
     """长轮询：等到有新事件或超时。给 HTTP /events 用。"""

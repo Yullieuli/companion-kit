@@ -20,9 +20,8 @@
 
 from __future__ import annotations
 
-import copy
 import json
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any
 
 from . import events, mood as mood_mod
@@ -49,14 +48,12 @@ WHY = {
     "shared": "把喜欢的东西分享出去了",
 }
 
-
 def _load(home: Home) -> dict[str, Any]:
     try:
         d = json.loads((home.root / DAILY).read_text(encoding="utf-8"))
         return d if isinstance(d, dict) else {}
     except Exception:
         return {}
-
 
 def _save(home: Home, data: dict[str, Any]) -> None:
     p = home.root / DAILY
@@ -65,14 +62,12 @@ def _save(home: Home, data: dict[str, Any]) -> None:
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(p)
 
-
 def used_today(home: Home, now: datetime | None = None) -> dict[str, float]:
     now = now or datetime.now()
     d = _load(home)
     if str(d.get("day")) != now.date().isoformat():
         return {}
     return {k: float(v) for k, v in (d.get("used") or {}).items()}
-
 
 def _clip(delta: dict[str, float], used: dict[str, float]) -> dict[str, float]:
     """按当天剩余额度裁剪。正负方向各自算额度。"""
@@ -91,7 +86,6 @@ def _clip(delta: dict[str, float], used: dict[str, float]) -> dict[str, float]:
         if abs(step) > 1e-9:
             out[axis] = round(step, 2)
     return out
-
 
 def nudge(home: Home, event: str, *, gap_hours: float = 0.0,
           now: datetime | None = None) -> dict[str, Any]:
@@ -125,10 +119,8 @@ def nudge(home: Home, event: str, *, gap_hours: float = 0.0,
     return {"ok": True, "applied": clipped, "event": event,
             "label": after.get("label"), "summary": mood_mod.summary(after)}
 
-
 def on_turn(home: Home, *, gap_hours: float = 0.0, now: datetime | None = None) -> dict[str, Any]:
     return nudge(home, "turn", gap_hours=gap_hours, now=now)
-
 
 def on_watched(home: Home, score: int = 0, *, now: datetime | None = None) -> dict[str, Any]:
     """只有她真觉得好看才推（评分 ≥6）。什么都推等于什么都不是。"""
@@ -136,10 +128,8 @@ def on_watched(home: Home, score: int = 0, *, now: datetime | None = None) -> di
         return {"ok": False, "why": f"评分 {score} 不够喜欢"}
     return nudge(home, "watched", now=now)
 
-
 def on_shared(home: Home, *, now: datetime | None = None) -> dict[str, Any]:
     return nudge(home, "shared", now=now)
-
 
 def snapshot(home: Home, now: datetime | None = None) -> dict[str, Any]:
     """给 status 用：今天还剩多少额度、心情是什么。"""
@@ -187,13 +177,11 @@ AMBIENT_WHY = {
     "late_night": "这么晚还醒着",
 }
 
-
 def _apply_ambient(home: Home, event: str, now: datetime) -> dict[str, Any]:
     before = mood_mod.decay(home.mood(), now)
     after = mood_mod.apply_delta(before, AMBIENT[event], why=AMBIENT_WHY[event], now=now)
     home.save_json("mood/state.json", after)
     return after
-
 
 def ambient(home: Home, now: datetime | None = None) -> dict[str, Any]:
     """每轮 tick 检查一次：被冷落 / 很久没见 / 深夜。每种每天最多一次。"""

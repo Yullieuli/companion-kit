@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 _WEEK = "一二三四五六日"
@@ -116,7 +116,6 @@ def random_moment(start_min: int, end_min: int, rnd: Any) -> int:
 def next_window_after(rhythm: dict[str, Any], now: datetime | None = None) -> dict[str, Any] | None:
     """今天剩下/即将到来的窗口；跨午夜时返回明早那个。"""
     now = now or datetime.now()
-    m = minutes_of(now)
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     cands = []
     for w in windows(rhythm):

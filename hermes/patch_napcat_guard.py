@@ -22,9 +22,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
+
 import shutil
-import sys
+
 import time
 from pathlib import Path
 
@@ -55,7 +55,6 @@ BLOCK = '''
             logger.debug("companion 闸异常，放行：%s", _ce)
 '''
 
-
 def find_anchor(text: str) -> int:
     """返回锚点所在行号（1 起）；找不到返回 0。"""
     for i, line in enumerate(text.splitlines(), 1):
@@ -63,10 +62,8 @@ def find_anchor(text: str) -> int:
             return i
     return 0
 
-
 def build_block(gate: str, python: str) -> str:
     return BLOCK.format(marker=MARKER, gate=gate, python=python)
-
 
 def apply_patch(target: Path, gate: str, python: str) -> tuple[bool, str]:
     """返回 (是否改动了, 说明)。幂等。"""
@@ -88,7 +85,6 @@ def apply_patch(target: Path, gate: str, python: str) -> tuple[bool, str]:
     target.write_text("".join(new_lines), encoding="utf-8")
     return True, f"已插入（第 {line + 1} 行起），备份：{backup}"
 
-
 def revert(target: Path) -> tuple[bool, str]:
     backups = sorted(target.parent.glob(target.name + ".bak-gate-*"))
     if not backups:
@@ -96,7 +92,6 @@ def revert(target: Path) -> tuple[bool, str]:
     latest = backups[-1]
     shutil.copy2(latest, target)
     return True, f"已回滚到 {latest.name}"
-
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="把 companion 发送前闸插进 napcat 插件")
@@ -139,7 +134,6 @@ def main() -> int:
     out = {"ok": True, "changed": changed, "why": why, "gate": gate, "python": python}
     print(json.dumps(out, ensure_ascii=False) if args.json else ("✓ " if why else "· " + why))
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

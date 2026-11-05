@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any
 
 # 元 / 百万 token
@@ -63,7 +63,6 @@ ROUTE_FILE = "cost/route.json"
 # 一次"醒来"的典型规模：固定前缀 + 工具定义 + 注入上下文
 TYPICAL_TURN = {"fresh_tokens": 20000, "cached_tokens": 0, "output_tokens": 600}
 
-
 def route_table(home=None) -> dict[str, Any]:
     """档位与任务映射，可被 store 里的 cost/route.json 覆盖（她/他能自己调）。"""
     tiers = {k: dict(v) for k, v in TIERS.items()}
@@ -81,7 +80,6 @@ def route_table(home=None) -> dict[str, Any]:
                 tasks[str(k)] = str(v)
     return {"tiers": tiers, "tasks": tasks}
 
-
 def route(task: str, home=None, *, prices: dict[str, dict[str, float]] | None = None) -> dict[str, Any]:
     """这个任务该用哪个档的模型、大概花多少。宿主照着选模型就行。"""
     table = route_table(home)
@@ -95,11 +93,9 @@ def route(task: str, home=None, *, prices: dict[str, dict[str, float]] | None = 
             "est_cny": round(est, 6), "tokens": tok,
             "price_per_mtok": price_of(info["model"], prices)}
 
-
 def price_of(model: str, prices: dict[str, dict[str, float]] | None = None) -> dict[str, float]:
     table = {**DEFAULT_PRICES, **(prices or {})}
     return table.get(model) or table["deepseek-v4.1-flash"]
-
 
 def cost_cny(
     fresh_tokens: int,
@@ -116,7 +112,6 @@ def cost_cny(
         6,
     )
 
-
 @dataclass
 class Spend:
     rows: list[dict[str, Any]]
@@ -131,10 +126,8 @@ class Spend:
     def turns(self, now: datetime | None = None) -> int:
         return len(self.today(now))
 
-
 def load_rows(home) -> list[dict[str, Any]]:
     return home.read_jsonl("logs/cost.jsonl", limit=5000)
-
 
 def record_turn(
     home,
@@ -184,10 +177,8 @@ def record_turn(
     home.append_jsonl("logs/cost.jsonl", row)
     return {**row, "duplicate": False}
 
-
 def today_total(home, now: datetime | None = None) -> float:
     return Spend(load_rows(home)).total(now)
-
 
 def allow_turn(
     home,
@@ -217,18 +208,12 @@ def allow_turn(
         return True, f"注意：今天已花 ¥{spent:.3f}（预算 ¥{cap:.2f} 的 {spent / cap:.0%}）", projected
     return True, "", projected
 
-
 def summary(home, now: datetime | None = None, budget: dict[str, Any] | None = None) -> str:
     now = now or datetime.now()
     b = {**DEFAULT_BUDGET, **(budget or {})}
     rows = Spend(load_rows(home))
     total = rows.total(now)
     return f"今天 ¥{total:.3f} / ¥{float(b['daily_cny']):.2f}，{rows.turns(now)} 轮"
-
-
-def cheapest_first(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """同样收益时，先选便宜的那个。给自主决策用。"""
-    return sorted(candidates, key=lambda c: (float(c.get("score", 0)) / max(1e-6, float(c.get("cost", 0)))), reverse=True)
 
 # ── 配置层覆盖（settings.json，缺省回落上面的常量）──────────────
 from . import settings as _settings

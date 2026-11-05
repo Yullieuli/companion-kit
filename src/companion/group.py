@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 import random
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from . import guard
@@ -36,12 +36,10 @@ DEFAULT_CFG: dict[str, Any] = {
     "same_topic_overlap": 6,
 }
 
-
 def config(home: Home) -> dict[str, Any]:
     out = dict(DEFAULT_CFG)
     out.update(home._json(STATE, {}).get("config") or {})
     return out
-
 
 def _state(home: Home) -> dict[str, Any]:
     d = home._json(STATE, {})
@@ -54,10 +52,8 @@ def _state(home: Home) -> dict[str, Any]:
     d.setdefault("hour_count", 0)
     return d
 
-
 def _save(home: Home, st: dict[str, Any]) -> None:
     home.save_json(STATE, st)
-
 
 def addressed(text: str, cfg: dict[str, Any] | None = None) -> bool:
     cfg = cfg or DEFAULT_CFG
@@ -65,7 +61,6 @@ def addressed(text: str, cfg: dict[str, Any] | None = None) -> bool:
     if "@" in t or "[CQ:at," in t:
         return True
     return any(w and w in t for w in (cfg.get("address_words") or []))
-
 
 def judge(
     home: Home,
@@ -120,7 +115,6 @@ def judge(
     _save(home, st)
     return {"mode": "lurk", "reason": "看到了，但没什么想说的", "score": round(roll, 3)}
 
-
 def note_reply(home: Home, now: datetime | None = None, *, text: str = "") -> None:
     """真接了话才调。重置潜水计数、记冷却与小时配额。
 
@@ -143,12 +137,10 @@ def note_reply(home: Home, now: datetime | None = None, *, text: str = "") -> No
     home.append_jsonl("logs/group.jsonl", {"at": now.isoformat(timespec="seconds"), "event": "reply"})
     _save(home, st)
 
-
 def note_lurk(home: Home, now: datetime | None = None) -> None:
     st = _state(home)
     st["lurk_streak"] = int(st.get("lurk_streak") or 0) + 1
     _save(home, st)
-
 
 def status(home: Home, now: datetime | None = None) -> dict[str, Any]:
     now = now or datetime.now()

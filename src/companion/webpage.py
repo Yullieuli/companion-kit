@@ -26,10 +26,10 @@ from __future__ import annotations
 
 import hashlib
 import html as htmlmod
-import json
+
 import re
 import time
-from pathlib import Path
+
 from typing import Any
 
 from . import fence
@@ -61,7 +61,6 @@ _SENT_SPLIT = re.compile(r"(?<=[。！？!?；;])|(?<=[.!?])\s+")
 # 疑问词/关键词：挑句时给分
 _STOP = set("的了是在和与也就都而及或着过一个我你他她它们这那些是在有没不很就要会能可以什么怎么为什么吗呢啊吧")
 
-
 # ── 抽正文 ───────────────────────────────────────────────
 def extract_text(html: str) -> str:
     """从 HTML 里抽出可读正文。"""
@@ -78,7 +77,6 @@ def extract_text(html: str) -> str:
     t = "\n".join(line.strip() for line in t.splitlines())
     t = _NL_RE.sub("\n\n", t)
     return _dedup_lines(t.strip())
-
 
 def _dedup_lines(text: str) -> str:
     """去掉重复的行。
@@ -101,7 +99,6 @@ def _dedup_lines(text: str) -> str:
         out.append(line)
     return "\n".join(out)
 
-
 def _sentences(text: str) -> list[str]:
     out: list[str] = []
     for chunk in (text or "").split("\n"):
@@ -113,7 +110,6 @@ def _sentences(text: str) -> list[str]:
             if len(s) >= 4:
                 out.append(s)
     return out
-
 
 def _terms(text: str) -> list[str]:
     """切出用于打分的词。中文按 2-3 字滑窗，英文按单词。"""
@@ -127,7 +123,6 @@ def _terms(text: str) -> list[str]:
         for i in range(len(run) - 2):
             terms.append(run[i : i + 3])
     return terms
-
 
 def summarize(html_or_text: str, *, max_chars: int = DEFAULT_MAX_CHARS,
               focus: str = "", is_html: bool = False) -> dict[str, Any]:
@@ -198,7 +193,6 @@ def summarize(html_or_text: str, *, max_chars: int = DEFAULT_MAX_CHARS,
         "focus": focus,
     }
 
-
 # ── 挑页 ─────────────────────────────────────────────────
 def pick_pages(pages: list[dict[str, Any]], query: str = "", *, top: int = 3) -> list[dict[str, Any]]:
     """从一批搜索结果里挑出最相关的几页。
@@ -230,17 +224,14 @@ def pick_pages(pages: list[dict[str, Any]], query: str = "", *, top: int = 3) ->
     out.sort(key=lambda r: -r["score"])
     return out[:top]
 
-
 # ── 缓存 ─────────────────────────────────────────────────
 def _index(home: Home) -> dict[str, Any]:
     d = home._json(INDEX, {})
     d.setdefault("pages", {})
     return d
 
-
 def _url_key(url: str) -> str:
     return hashlib.sha1((url or "").strip().lower().encode("utf-8")).hexdigest()[:16]
-
 
 def cache_get(home: Home, url: str, *, ttl: int = DEFAULT_TTL,
               now: float | None = None) -> dict[str, Any] | None:
@@ -254,7 +245,6 @@ def cache_get(home: Home, url: str, *, ttl: int = DEFAULT_TTL,
     return {"url": row.get("url"), "summary": row.get("summary") or "",
             "text": row.get("text") or "", "age": round(age, 1),
             "fresh": age <= ttl, "hits": int(row.get("hits") or 0)}
-
 
 def cache_put(home: Home, url: str, *, summary: str = "", text: str = "",
               now: float | None = None) -> dict[str, Any]:
@@ -272,7 +262,6 @@ def cache_put(home: Home, url: str, *, summary: str = "", text: str = "",
     d["pages"] = dict(items[:200])
     home.save_json(INDEX, d)
     return {"url": url, "key": key, "hits": d["pages"][key]["hits"]}
-
 
 def read_page(home: Home, url: str, html: str = "", *, ttl: int = DEFAULT_TTL,
               max_chars: int = DEFAULT_MAX_CHARS, focus: str = "",
@@ -297,7 +286,6 @@ def read_page(home: Home, url: str, html: str = "", *, ttl: int = DEFAULT_TTL,
     return {"ok": True, "cached": False, "url": url, "summary": summ["summary"],
             "text": clean_raw[:max_chars], "chars": len(clean_raw),
             "hits": hits, "sentences": summ["sentences"]}
-
 
 def stats(home: Home) -> dict[str, Any]:
     d = _index(home)

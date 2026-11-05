@@ -13,10 +13,9 @@ frontmatter 是自己解析的：不引 yaml 依赖，格式写死成三行，�
 
 from __future__ import annotations
 
-import hashlib
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,18 +23,15 @@ from .store import Home
 
 PAGES = "memory/pages"
 INDEX = "memory/index.md"
-MAX_PAGES = 300
 STALE_DAYS = 90
 
 _SLUG_BAD = re.compile(r"[^\w\u4e00-\u9fff-]+")
-
 
 def slugify(title: str, fallback: str = "note") -> str:
     s = _SLUG_BAD.sub("-", (title or "").strip()).strip("-").lower()
     if not s:
         s = fallback
     return s[:60]
-
 
 @dataclass
 class Page:
@@ -56,14 +52,12 @@ class Page:
             "chars": len(self.body),
         }
 
-
 # ── 解析 / 序列化 ────────────────────────────────────────────
 def _parse_tags(raw: str) -> list[str]:
     raw = raw.strip()
     if raw.startswith("[") and raw.endswith("]"):
         raw = raw[1:-1]
     return [t.strip().strip("'\"") for t in raw.split(",") if t.strip()]
-
 
 def parse(text: str, slug: str = "") -> Page:
     """宽容解析：frontmatter 缺字段就当空，坏行跳过，绝不抛。"""
@@ -89,7 +83,6 @@ def parse(text: str, slug: str = "") -> Page:
         last_access=meta.get("last_access", "").strip(),
     )
 
-
 def dump(page: Page) -> str:
     tags = ", ".join(page.tags)
     return (
@@ -102,13 +95,11 @@ def dump(page: Page) -> str:
         f"{page.body.strip()}\n"
     )
 
-
 # ── 读写 ────────────────────────────────────────────────────
 def _dir(home: Home) -> Path:
     p = home.root / PAGES
     p.mkdir(parents=True, exist_ok=True)
     return p
-
 
 def pages(home: Home) -> list[Page]:
     out: list[Page] = []
@@ -119,13 +110,11 @@ def pages(home: Home) -> list[Page]:
             continue
     return out
 
-
 def get(home: Home, slug: str) -> Page | None:
     f = _dir(home) / f"{slugify(slug)}.md"
     if not f.exists():
         return None
     return parse(f.read_text(encoding="utf-8"), f.stem)
-
 
 def write(
     home: Home,
@@ -155,7 +144,6 @@ def write(
     build_index(home)
     return page
 
-
 def append(home: Home, slug: str, line: str, now: datetime | None = None) -> Page:
     """往已有页补一句（不重新写整页）。"""
     now = now or datetime.now()
@@ -168,7 +156,6 @@ def append(home: Home, slug: str, line: str, now: datetime | None = None) -> Pag
     build_index(home)
     return p
 
-
 def touch(home: Home, slug: str, now: datetime | None = None) -> bool:
     p = get(home, slug)
     if p is None:
@@ -177,7 +164,6 @@ def touch(home: Home, slug: str, now: datetime | None = None) -> bool:
     (_dir(home) / f"{p.slug}.md").write_text(dump(p), encoding="utf-8")
     return True
 
-
 # ── 检索 ────────────────────────────────────────────────────
 def _days_ago(date_str: str) -> float:
     try:
@@ -185,7 +171,6 @@ def _days_ago(date_str: str) -> float:
     except Exception:
         return 999.0
     return max(0.0, (datetime.now() - d).days)
-
 
 def search(home: Home, query: str, *, limit: int = 5) -> list[tuple[float, Page]]:
     """标签命中 3 分、summary 2 分、正文每次命中 0.6 分（最多 3 次），越近加分。"""
@@ -213,10 +198,8 @@ def search(home: Home, query: str, *, limit: int = 5) -> list[tuple[float, Page]
     scored.sort(key=lambda x: (-x[0], x[1].slug))
     return scored[:limit]
 
-
 def links(page: Page) -> list[str]:
     return re.findall(r"\[\[([^\]]+)\]\]", page.body or "")
-
 
 def orphans(home: Home) -> list[str]:
     """没有任何页链到它、它也不链出去的页。"""
@@ -226,10 +209,8 @@ def orphans(home: Home) -> list[str]:
         linked.update(slugify(x) for x in links(p))
     return [p.slug for p in all_pages if not links(p) and p.slug not in linked]
 
-
 def stale(home: Home, days: int = STALE_DAYS) -> list[str]:
     return sorted(p.slug for p in pages(home) if _days_ago(p.last_access) >= days)
-
 
 # ── 索引（投影，不手写）──────────────────────────────────────
 def build_index(home: Home) -> str:
@@ -257,7 +238,6 @@ def build_index(home: Home) -> str:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text, encoding="utf-8")
     return text
-
 
 def render(home: Home, query: str = "", *, limit: int = 6, max_chars: int = 900) -> str:
     """给 context 用的一段：相关页的 summary，不是全文。"""

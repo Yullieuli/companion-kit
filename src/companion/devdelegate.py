@@ -18,12 +18,11 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
+
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
-
 
 def in_wsl() -> bool:
     if sys.platform == "win32":
@@ -33,7 +32,6 @@ def in_wsl() -> bool:
     except Exception:
         return False
 
-
 def win_to_wsl(path: str) -> str:
     """C:////Users////... 换成 /mnt/c/Users/...（用来在 WSL 里判断文件在不在）"""
     p = str(path or "").replace("\\", "/")
@@ -41,12 +39,10 @@ def win_to_wsl(path: str) -> str:
         return "/mnt/" + p[0].lower() + "/" + p[3:].lstrip("/")
     return p
 
-
 def config_of(home) -> dict[str, str]:
     cfg = home._json("devices.json", {})  # noqa: SLF001 — store 的唯一出口
     win = cfg.get("windows") or {}
     return {"python": str(win.get("python") or ""), "src": str(win.get("src") or "")}
-
 
 def wanted(home) -> bool:
     """该不该转发。三个条件：在 WSL、不是 Windows、配置齐了。"""
@@ -54,7 +50,6 @@ def wanted(home) -> bool:
         return False
     c = config_of(home)
     return bool(c["python"] and Path(win_to_wsl(c["python"])).exists())
-
 
 def _env(home, src: str) -> dict[str, str]:
     """WSL → Win32 只传 WSLENV 里列出来的变量。
@@ -70,7 +65,6 @@ def _env(home, src: str) -> dict[str, str]:
     env["WSLENV"] = "PYTHONPATH/p:COMPANION_HOME/p:PYTHONIOENCODING"
     return env
 
-
 def wsl_to_win(path: str, home_root: str = "") -> str:
     """把 WSL 路径翻成 Windows 风格（子进程要用它比对自己在哪个盘）。
 
@@ -83,7 +77,6 @@ def wsl_to_win(path: str, home_root: str = "") -> str:
         rest = p[6:].lstrip("/")
         return drive + ":" + bs + rest.replace("/", bs)
     return p
-
 
 def _translate(obj: Any, pairs: list[tuple[str, str]]) -> Any:
     """返回值里的 Windows 路径换成 WSL 能打开的写法。
@@ -102,7 +95,6 @@ def _translate(obj: Any, pairs: list[tuple[str, str]]) -> Any:
     if isinstance(obj, dict):
         return {k: _translate(v, pairs) for k, v in obj.items()}
     return obj
-
 
 def run(argv: list[str], home, *, timeout: int = 180) -> tuple[int, str, str]:
     """原样转发，返回值已把 Windows 路径翻好。"""
@@ -129,7 +121,6 @@ def run(argv: list[str], home, *, timeout: int = 180) -> tuple[int, str, str]:
         except Exception:
             pass
     return done.returncode, out, done.stderr or ""
-
 
 def call(argv: list[str], home, *, timeout: int = 180) -> int:
     """转发并回显。返回退出码，交给 cli.main 当自己的退出码。"""

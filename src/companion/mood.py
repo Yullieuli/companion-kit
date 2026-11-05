@@ -67,16 +67,6 @@ def label_for(axes: dict[str, Any]) -> str:
     return "平静"
 
 
-def band_floor(label: str) -> float:
-    """这个标签至少需要多少 |satisfaction| 才保得住；0 表示不受限。"""
-    return {
-        "雀跃": 60.0,
-        "开心": 20.0,
-        "低落": 20.0,
-        "难过": 50.0,
-    }.get(label, 0.0)
-
-
 def is_low(state: dict[str, Any]) -> bool:
     return float(state["axes"].get("satisfaction", 0)) <= LOW_THRESHOLD
 

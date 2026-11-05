@@ -16,7 +16,7 @@ import os
 from datetime import datetime
 from typing import Any
 
-from . import bili, clock, cost, events, initiative, mood as mood_mod, quota as quota_mod
+from . import bili, clock, cost, events, initiative, mood as mood_mod, mood_rules, quota as quota_mod
 from .store import Home
 
 SPEAKING = ("speak", "voice", "sing", "share")
@@ -167,6 +167,15 @@ def _tick_unlocked(
             "remaining_cny": 0.0, "in_sleep": False, "in_window": False, "host": host,
         }
     fb = initiative.settle(home, now=now)
+    # 环境事件先结算：她这段时间是「被冷落 / 很久没见 / 深夜」中的哪一种，
+    # 每一种都会改 mood，而这一轮的决策必须看到改过之后的 mood。
+    # 2026-11-05：这里原来漏了 import mood_rules，NameError 被 except 吞掉，
+    # 整套环境事件从写下就没生效过。顺序也错了——原来放在 situation 之后，
+    # 就算 import 对了，决策用的还是旧 mood。
+    try:
+        ambient_result = mood_rules.ambient(home, now=now)
+    except Exception as e:  # 环境事件坏了不该拦住整轮决策
+        ambient_result = {"applied": [], "error": type(e).__name__}
     m = mood_mod.decay(home.mood(), now)
     q = home.quota()
     spent = cost.today_total(home, now)
@@ -199,14 +208,11 @@ def _tick_unlocked(
         free_time_used=free_time_used,
         hours_since_free=hours_since_free,
     )
-    # 环境事件先结算：她这段时间是「被冷落 / 很久没见 / 深夜」中的哪一种，
-    # 都会影响这一轮决策时看到的 mood。
-    try:
-        ambient_result = mood_rules.ambient(home, now=now)
-    except Exception:
-        ambient_result = {"applied": []}
-
+    # 环境事件已经在上面结算过（那会改 mood），这里只把结果挂到决策上，
+    # 方便回看「这一轮为什么她情绪不对」。
     decision = initiative.decide(situation, rnd)
+    if ambient_result.get("applied"):
+        decision["ambient"] = list(ambient_result["applied"])
 
     event = None
     if decision["action"] in SPEAKING:

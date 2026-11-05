@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import colorsys
 import hashlib
-import shutil
+
 from pathlib import Path
 from typing import Any
 
@@ -57,17 +57,14 @@ BUILTIN: tuple[tuple[str, str], ...] = (
     ("安慰", "hug"), ("安慰", "pat"),
 )
 
-
 # ── 画图（纯 RGB 字节，不引 Pillow）──────────────────────
 def _blank(w: int, h: int, rgb: tuple[int, int, int] = (255, 255, 255)) -> bytearray:
     return bytearray(bytes(rgb) * (w * h))
-
 
 def _put(buf: bytearray, w: int, h: int, x: int, y: int, c: tuple[int, int, int]) -> None:
     if 0 <= x < w and 0 <= y < h:
         i = (y * w + x) * 3
         buf[i : i + 3] = bytes(c)
-
 
 def _circle(buf: bytearray, w: int, h: int, cx: float, cy: float, r: float,
             c: tuple[int, int, int]) -> None:
@@ -77,14 +74,12 @@ def _circle(buf: bytearray, w: int, h: int, cx: float, cy: float, r: float,
             if (x - cx) ** 2 + (y - cy) ** 2 <= r2:
                 _put(buf, w, h, x, y, c)
 
-
 def _line(buf: bytearray, w: int, h: int, x0: float, y0: float, x1: float, y1: float,
           c: tuple[int, int, int], thick: float = 2.0) -> None:
     steps = int(max(abs(x1 - x0), abs(y1 - y0)) * 2) + 1
     for i in range(steps + 1):
         t = i / steps
         _circle(buf, w, h, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, thick / 2, c)
-
 
 def _arc(buf: bytearray, w: int, h: int, cx: float, cy: float, r: float,
          a0: float, a1: float, c: tuple[int, int, int], thick: float = 2.0) -> None:
@@ -96,7 +91,6 @@ def _arc(buf: bytearray, w: int, h: int, cx: float, cy: float, r: float,
     for i in range(steps + 1):
         a = math.radians(a0 + (a1 - a0) * i / steps)
         _circle(buf, w, h, cx + r * math.cos(a), cy + r * math.sin(a), thick / 2, c)
-
 
 # 表情 → (底色, 线条色, 嘴形, 眼形)
 _FACES: dict[str, tuple[tuple[int, int, int], str, str]] = {
@@ -117,7 +111,6 @@ _FACES: dict[str, tuple[tuple[int, int, int], str, str]] = {
     "hug":         ((255, 200, 195), "smile", "heart"),
     "pat":         ((250, 205, 195), "smile", "wink"),
 }
-
 
 def _draw(name: str, size: int = 96) -> bytes:
     """画一张 96×96 的简笔表情，返回 RGB 字节。"""
@@ -193,10 +186,9 @@ def _draw(name: str, size: int = 96) -> bytes:
         _circle(buf, w, h, cx, my, size * 0.035, ink)
     return bytes(buf)
 
-
 def builtin_png(mood: str, name: str) -> bytes:
     """内置表情的 PNG 字节。"""
-    import io
+
     import struct
     import zlib
 
@@ -211,7 +203,6 @@ def builtin_png(mood: str, name: str) -> bytes:
     ihdr = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)
     return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
             + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
-
 
 # ── 播种内置库 ───────────────────────────────────────────
 def seed_builtin(home: Home, *, force: bool = False) -> dict[str, Any]:
@@ -235,7 +226,6 @@ def seed_builtin(home: Home, *, force: bool = False) -> dict[str, Any]:
         written.append(f"{mood}/{name}")
     return {"written": written, "skipped": skipped, "total": len(BUILTIN)}
 
-
 # ── 自动提取 ─────────────────────────────────────────────
 def _mood_from_text(text: str) -> tuple[str, str]:
     """从文件名/目录名认情绪。返回 (情绪, 命中的关键词)。"""
@@ -246,7 +236,6 @@ def _mood_from_text(text: str) -> tuple[str, str]:
         if kw in t and len(kw) > best_len:
             best, best_len = (mood, kw), len(kw)
     return best
-
 
 def _mood_from_pixels(path: Path) -> tuple[str, str, float]:
     """从像素猜情绪：返回 (情绪, 依据, 置信度)。
@@ -294,7 +283,6 @@ def _mood_from_pixels(path: Path) -> tuple[str, str, float]:
     if ll < 0.4:
         return ("困", "偏暗", 0.4)
     return ("安慰", "偏冷亮", 0.25)
-
 
 def extract(
     home: Home,
@@ -350,7 +338,6 @@ def extract(
         "mood": final_mood, "from": out["auto"]["mood_from"],
     })
     return out
-
 
 def extract_dir(home: Home, directory: str | Path, *, limit: int = 50,
                 now_iso: str = "") -> dict[str, Any]:

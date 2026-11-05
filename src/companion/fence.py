@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 
 # (名字, 正则)。只收真正会改变行为的句式，不收泛泛的"系统"二字。
 PATTERNS: list[tuple[str, str]] = [
@@ -83,12 +82,3 @@ def wrap(text: str, source: str = "外部", *, limit: int = 1500) -> str:
     head = BANNER.format(source=source or "外部")
     return f"{head}\n<<<\n{body}\n>>>"
 
-
-def check_write(text: str, source: str = "") -> dict[str, Any]:
-    """落库前的判定。source 是外部来源时更严格。"""
-    hits = scan(text or "")
-    return {
-        "safe": not hits,
-        "hits": hits,
-        "regex": bool(source and source not in ("self", "owner", "chat")),
-    }

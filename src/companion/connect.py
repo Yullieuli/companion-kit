@@ -531,34 +531,6 @@ def yaml_inject_hooks(text: str, pairs: list[tuple[str, str]]) -> tuple[str, lis
     return text, added
 
 
-def yaml_verify_hooks(text: str, pairs: list[tuple[str, str]]) -> tuple[bool, str]:
-    """结构校验：每个命令都出现在对应事件段下，且缩进是 4 空格。"""
-    for event, command in pairs:
-        lines = text.splitlines()
-        bounds = _yaml_hooks_bounds([ln + "\n" for ln in lines])
-        if bounds is None:
-            return False, "没有 hooks: 段"
-        start, end = bounds
-        key_line = None
-        for i in range(start + 1, end):
-            if lines[i].strip() == event + ":":
-                key_line = i
-                break
-        if key_line is None:
-            return False, f"缺少 {event}: 段"
-        found = False
-        for i in range(key_line + 1, end):
-            ln = lines[i]
-            if ln.strip() and not ln.startswith("      ") and not ln.startswith("    - "):
-                break
-            if command in ln:
-                found = True
-                break
-        if not found:
-            return False, f"{event} 下没有这条命令"
-    return True, "hooks 结构检查通过"
-
-
 # ── 子进程 ───────────────────────────────────────────────────
 
 

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import html
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +34,6 @@ CACHE = "bili/search_cache.json"
 
 BV_RE = re.compile(r"BV[0-9A-Za-z]{10}")
 _TAG_RE = re.compile(r"<[^>]+>")
-
 
 def _clean_title(raw: Any) -> str:
     """标题去脏：剥搜索接口的高亮标签、还原 HTML 实体、压空白。
@@ -79,7 +78,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # 之前的 "极客湾" + "评测" + "拆解" 三个词叠在一起，把搜索结果锁死在
         # 硬件评测上；"影之刃" 又锁在一个游戏上。具体喜欢谁应该在 opinion /
         # character 里长出来，不该硬编码在打分表。
-        "like": ["纪录片", "手工", "科普", "独立游戏"],
+        "like": ["纪录片", "手工", "科普", "独立游戏", "动漫"],
         "dislike": ["营销号", "标题党", "擦边", "搬运", "切片", "合集"],
     },
 }
@@ -95,7 +94,6 @@ DEFAULT_STATE: dict[str, Any] = {
     "share_today": 0,
 }
 
-
 # ── 状态与配置 ────────────────────────────────────────────────────────────────
 
 def load(home: Home) -> dict[str, Any]:
@@ -110,10 +108,8 @@ def load(home: Home) -> dict[str, Any]:
         out["share_today"] = 0
     return out
 
-
 def save(home: Home, st: dict[str, Any]) -> None:
     home.save_json(STATE, st)
-
 
 def daily_used(home: Home, name: str, *, st: dict[str, Any] | None = None,
                now: datetime | None = None) -> int:
@@ -137,13 +133,11 @@ def daily_used(home: Home, name: str, *, st: dict[str, Any] | None = None,
             q = q2
     return quota.bucket_used(q, name, now)
 
-
 def record_used(home: Home, name: str, now: datetime | None = None) -> int:
     now = now or datetime.now()
     st = quota.bucket_record(home.quota(), name, now)
     home.save_json("quota.json", st)
     return quota.bucket_used(st, name, now)
-
 
 def config(home: Home) -> dict[str, Any]:
     cfg = {**DEFAULT_CONFIG, **home._json(CONFIG, DEFAULT_CONFIG)}  # noqa: SLF001
@@ -152,10 +146,8 @@ def config(home: Home) -> dict[str, Any]:
         cfg[key] = {**DEFAULT_CONFIG[key], **(cfg.get(key) or {})}
     return cfg
 
-
 def save_config(home: Home, cfg: dict[str, Any]) -> None:
     home.save_json(CONFIG, cfg)
-
 
 # ── 归一化 ────────────────────────────────────────────────────────────────────
 
@@ -176,7 +168,6 @@ def _seconds(value: Any) -> int:
         return sec
     except Exception:
         return 0
-
 
 def normalize(item: dict[str, Any], src: str = "") -> dict[str, Any]:
     """把五个入口的不同结构拍成一种。缺 bvid 的直接返回 {}。"""
@@ -199,15 +190,12 @@ def normalize(item: dict[str, Any], src: str = "") -> dict[str, Any]:
         "src": src or str(item.get("_src") or ""),
     }
 
-
 def _core(text: str) -> str:
     return re.sub(r"[^\w\u4e00-\u9fff]", "", str(text or ""))
-
 
 def grams(text: str, n: int = 3) -> set[str]:
     core = _core(text)
     return {core[i:i + n] for i in range(len(core) - n + 1)} if len(core) >= n else set()
-
 
 # ── 看过什么（唯一账本：life）─────────────────────────────────────────────────
 
@@ -268,7 +256,6 @@ def _legacy_watched(paths: list[str], *, hours: float,
                 cores.add(body)
     return bvids, frags, cores
 
-
 def watched(home: Home, *, hours: float = 72, now: datetime | None = None,
             cfg: dict[str, Any] | None = None) -> tuple[set[str], set[str], set[str]]:
     """返回 (看过的 bvid, 看过的标题 3-gram)。
@@ -302,7 +289,6 @@ def watched(home: Home, *, hours: float = 72, now: datetime | None = None,
         cores |= lc
     return bvids, frags, cores
 
-
 def looks_watched(title: str, frags: set[str], need: int = 3,
                   cores: set[str] | None = None) -> bool:
     """标题像不像"已经看过的那一条"。
@@ -322,17 +308,14 @@ def looks_watched(title: str, frags: set[str], need: int = 3,
         return False
     return len(grams(title) & frags) >= need
 
-
 _BOOK = re.compile(r"《([^》]{2,40})》")
 # life 里存的是「刷B站，看了《<视频标题>》（UP：<up>，<时长>）」，
 # 不剥掉这层外壳，下面取到的是整条视频名而不是作品名。
 _LIFE_WRAP = re.compile(r"^刷B站，看了《(.*)》（UP：[^）]*）$", re.S)
 
-
 def _unwrap_life_title(raw: str) -> str:
     m = _LIFE_WRAP.match(str(raw or ""))
     return m.group(1) if m else str(raw or "")
-
 
 def _series_of(title: str, known: set[str]) -> str:
     """这条片子属于哪个作品。
@@ -353,7 +336,6 @@ def _series_of(title: str, known: set[str]) -> str:
     m = _BOOK.search(t)
     return m.group(1).strip() if m else ""
 
-
 def watched_series(home: Home, *, hours: float = 48,
                    now: datetime | None = None) -> set[str]:
     """48 小时内看过的作品名（《》里的内容，已剥掉 life 的外层包装）。"""
@@ -368,7 +350,6 @@ def watched_series(home: Home, *, hours: float = 48,
             out.add(m.group(1).strip())
     return out
 
-
 def pending_share(home: Home, *, days: float = 3, now: datetime | None = None) -> int:
     """看完还没给他的条数。这是"分享"这个动作唯一诚实的燃料。"""
     now = now or datetime.now()
@@ -377,7 +358,6 @@ def pending_share(home: Home, *, days: float = 3, now: datetime | None = None) -
         1 for r in home.read_jsonl("life/life.jsonl", limit=100000)
         if r.get("bvid") and not r.get("shared") and float(r.get("epoch") or 0) >= cut
     )
-
 
 # ── 打分 ──────────────────────────────────────────────────────────────────────
 
@@ -394,7 +374,6 @@ def opinion_bonus(home: Home, blob: str) -> int:
             continue
         bonus += 3 if op.confidence >= 0.70 else 2
     return min(bonus, 6)
-
 
 def hype_penalty(title: str) -> int:
     """标题党信号：emoji 堆砌、连串感叹号、全大写吼叫。
@@ -415,13 +394,11 @@ def hype_penalty(title: str) -> int:
         n -= 1
     return n
 
-
 # 来源权重：她自己搜的 > 关注的人 / 上一条的相关 > 平台推的。
 # 2026-11-02 实测：候选池里 82% 是热门/排行，打分又不看来源，
 # 于是她一天刷的四条全是被推上来的同一部作品。
 # search 给 3，等于多命中一个口味词——她主动搜的方向应该压过平台塞的。
 SRC_BONUS = {"search": 3, "dynamic": 1, "related": 1, "popular": 0, "ranking": 0, "": 0}
-
 
 def score(item: dict[str, Any], cfg: dict[str, Any], home: Home) -> int:
     blob = f"{item.get('title', '')} {item.get('up', '')}".lower()
@@ -444,7 +421,6 @@ def score(item: dict[str, Any], cfg: dict[str, Any], home: Home) -> int:
     n += SRC_BONUS.get(str(item.get("src") or ""), 0)
     return n
 
-
 def her_views(home: Home, limit: int = 3) -> str:
     """挑片前把她自己的看法摆出来 —— 让她自己判断，而不是靠字符串算分。"""
     ops = [o for o in opinion.theses(home) if o.confidence >= 0.25]
@@ -454,7 +430,6 @@ def her_views(home: Home, limit: int = 3) -> str:
         lead = "你一直这么想" if o.confidence >= 0.70 else "你隐约觉得"
         lines.append(f"- {lead}：{o.claim}")
     return "\n".join(lines)
-
 
 # ── 候选池 ────────────────────────────────────────────────────────────────────
 
@@ -480,7 +455,6 @@ def cached_search(home: Home, net: Any, keyword: str, *, cfg: dict[str, Any],
          if now.timestamp() - float((v or {}).get("at") or 0) < 86400}
     home.save_json(CACHE, dict(list(d.items())[-20:]))
     return items, False
-
 
 def gather(net: Any, cfg: dict[str, Any], *, last_bvid: str = "",
            keywords: list[str] | None = None, home: Home | None = None,
@@ -521,7 +495,6 @@ def gather(net: Any, cfg: dict[str, Any], *, last_bvid: str = "",
         except Exception as e:
             notes.append(f"搜索失败:{type(e).__name__}")
     return [x for x in out if x], notes
-
 
 def pick(items: list[dict[str, Any]], home: Home, st: dict[str, Any], cfg: dict[str, Any], *,
          now: datetime | None = None) -> dict[str, Any]:
@@ -574,7 +547,6 @@ def pick(items: list[dict[str, Any]], home: Home, st: dict[str, Any], cfg: dict[
                 "top": fresh[:3]}
     return {"ok": True, "item": best, "top": fresh[:5]}
 
-
 # ── 深读 ──────────────────────────────────────────────────────────────────────
 
 def _mask(text: str, names: list[str]) -> str:
@@ -582,7 +554,6 @@ def _mask(text: str, names: list[str]) -> str:
         if n and len(str(n)) >= 2:
             text = text.replace(str(n), "主人")
     return text
-
 
 def _wrap_cjk(text: str, width: int = 90) -> str:
     """AI 字幕没有标点，一整段 1200 字读起来是墙。按标点断，没标点就硬折。"""
@@ -608,12 +579,10 @@ def _wrap_cjk(text: str, width: int = 90) -> str:
         lines.append(buf)
     return "\n".join(lines)
 
-
 def _external(text: str, names: list[str]) -> tuple[str, int]:
     """外部文本两道处理：去零宽 + 认劫持句式（fence），再把主人的昵称打码。"""
     clean, hits = fence.sanitize(text)
     return _mask(clean, names), len(hits)
-
 
 def _digest(mat: dict[str, Any]) -> str:
     """把读片素材压成一两句写进 life.detail。
@@ -632,7 +601,6 @@ def _digest(mat: dict[str, Any]) -> str:
         if t:
             bits.append(f"弹幕「{t}」")
     return "；".join(bits)[:170]
-
 
 def debrief(home: Home, bvid: str, *, net: Any, cfg: dict[str, Any] | None = None,
             frames: bool | None = None, names: list[str] | None = None) -> dict[str, Any]:
@@ -716,7 +684,6 @@ def debrief(home: Home, bvid: str, *, net: Any, cfg: dict[str, Any] | None = Non
         "text": "\n".join(lines),
     }
 
-
 # ── 记一笔 ────────────────────────────────────────────────────────────────────
 
 def _life_title(item: dict[str, Any]) -> str:
@@ -724,13 +691,11 @@ def _life_title(item: dict[str, Any]) -> str:
     tail = f"，{dur // 60}分{dur % 60}秒" if dur else ""
     return f"刷B站，看了《{item['title']}》（UP：{item.get('up') or '未知'}{tail}）"
 
-
 def mark_served(st: dict[str, Any], item: dict[str, Any], now: datetime) -> None:
     served = {k: v for k, v in (st.get("served") or {}).items()
               if now.timestamp() - float((v or {}).get("at") or 0) < 3 * 86400}
     served[item["bvid"]] = {"at": now.timestamp(), "title": item["title"][:80]}
     st["served"] = served
-
 
 def commit(home: Home, bvid: str, *, summary: str = "", rating: int | None = None,
            tags: list[str] | None = None, now: datetime | None = None) -> dict[str, Any]:
@@ -750,7 +715,6 @@ def commit(home: Home, bvid: str, *, summary: str = "", rating: int | None = Non
         patch["tags"] = sorted({*(row.get("tags") or []), *tags})
     updated = life.update(home, str(row.get("id")), **patch) if patch else row
     return {"ok": True, "life": updated, "patched": sorted(patch)}
-
 
 # ── 分享 ──────────────────────────────────────────────────────────────────────
 
@@ -783,7 +747,6 @@ def share_gate(home: Home, bvid: str, *, score_v: int, reason: str, rank: int = 
         except Exception:
             pass
     return {"ok": True, "score": int(score_v), "reason": str(reason).strip()}
-
 
 def share(home: Home, bvid: str, text: str, *, score_v: int, reason: str, rank: int = 1,
           via: str = "", to_mid: int | None = None, net: Any = None,
@@ -821,13 +784,11 @@ def share(home: Home, bvid: str, text: str, *, score_v: int, reason: str, rank: 
         pass
     return {"ok": True, "via": via, "sent": sent, "score": int(score_v), "reason": reason}
 
-
 def _within_days(day: str, now: datetime, days: int) -> bool:
     try:
         return (now.date() - date.fromisoformat(str(day))).days <= days
     except Exception:
         return False
-
 
 # ── 一轮 ──────────────────────────────────────────────────────────────────────
 
@@ -846,7 +807,6 @@ def due(home: Home, *, cfg: dict[str, Any] | None = None, now: datetime | None =
         left = int((float(cfg["min_gap_min"]) * 60 - gap) / 60)
         return {"due": False, "why": f"刚看过，还要等 {max(1, left)} 分钟"}
     return {"due": True, "why": ""}
-
 
 def tick(home: Home, *, net: Any = None, cfg: dict[str, Any] | None = None,
          now: datetime | None = None, frames: bool | None = None,
@@ -955,13 +915,11 @@ def tick(home: Home, *, net: Any = None, cfg: dict[str, Any] | None = None,
         "hint": "读完了用 bili commit 回填一句自己的感受；觉得他会喜欢就用 bili share。",
     }
 
-
 def has_credential(home: Home) -> bool:
     """能不能真的刷。没凭证时 due 不该说"可以" —— 那是句空话。"""
     from . import bilinet
 
     return bool(bilinet.credential_path(home.root))
-
 
 def status(home: Home, *, now: datetime | None = None) -> dict[str, Any]:
     cfg = config(home)

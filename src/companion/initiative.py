@@ -164,7 +164,6 @@ def bonus(fb: dict[str, Any], action: str) -> float:
 def _candidates(s: Situation) -> list[Candidate]:
     m = s.mood_state
     axes = m.get("axes") or {}
-    label = m.get("label") or "平静"
     low = mood_mod.is_low(m)
     energy = float(axes.get("energy", 0))
     closeness = float(axes.get("closeness", 0))
@@ -361,6 +360,5 @@ def _single(action: str, why: str, blocked: str) -> dict[str, Any]:
     }
 
 # ── 配置层覆盖（settings.json，缺省回落上面的常量）──────────────
-from . import settings as _settings
 MIN_SAMPLES = _settings.int_or("initiative", "min_samples", MIN_SAMPLES)
 SETTLE_HOURS = _settings.number("initiative", "settle_hours", SETTLE_HOURS)

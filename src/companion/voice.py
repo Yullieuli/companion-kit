@@ -16,9 +16,8 @@
 
 from __future__ import annotations
 
-import os
 import shutil
-import struct
+
 import subprocess
 import sys
 import wave
@@ -34,14 +33,8 @@ CHARS_PER_SECOND = 4.5
 
 BACKENDS = ("edge-tts", "sapi", "say", "espeak")
 
-
-class VoiceError(RuntimeError):
-    pass
-
-
 def estimate_seconds(text: str, rate: float = 1.0) -> float:
     return len(text or "") / (CHARS_PER_SECOND * max(0.5, rate))
-
 
 def check(text: str, *, public: bool = False, rate: float = 1.0) -> str:
     """返回空字符串 = 放行；否则是拒绝原因。"""
@@ -56,12 +49,10 @@ def check(text: str, *, public: bool = False, rate: float = 1.0) -> str:
         return f"预计 {estimate_seconds(text, rate):.0f} 秒，超过 {MAX_SECONDS} 秒上限"
     return ""
 
-
 def _out(home: Home, kind: str) -> Path:
     d = home.root / DIR
     d.mkdir(parents=True, exist_ok=True)
     return d / f"{datetime.now():%Y%m%d-%H%M%S}-{kind}.wav"
-
 
 def _duration(path: Path) -> float:
     try:
@@ -69,7 +60,6 @@ def _duration(path: Path) -> float:
             return w.getnframes() / float(w.getframerate() or 1)
     except Exception:
         return 0.0
-
 
 def _sapi(text: str, path: Path, rate: int = 0) -> bool:
     """Windows 自带 SAPI，不装任何包。Rate: -10..10。"""
@@ -90,7 +80,6 @@ def _sapi(text: str, path: Path, rate: int = 0) -> bool:
     except Exception:
         return False
 
-
 def _edge(text: str, path: Path, voice: str, rate: str) -> bool:
     exe = shutil.which("edge-tts")
     if not exe:
@@ -101,7 +90,6 @@ def _edge(text: str, path: Path, voice: str, rate: str) -> bool:
         return p.returncode == 0 and path.exists() and path.stat().st_size > 1000
     except Exception:
         return False
-
 
 def _say(text: str, path: Path, rate: int) -> bool:
     """macOS 自带 say。它只输出 aiff，所以还要 ffmpeg 转一道。"""
@@ -119,7 +107,6 @@ def _say(text: str, path: Path, rate: int) -> bool:
     except Exception:
         return False
 
-
 def _espeak(text: str, path: Path, rate: int) -> bool:
     exe = shutil.which("espeak-ng") or shutil.which("espeak")
     if not exe:
@@ -130,7 +117,6 @@ def _espeak(text: str, path: Path, rate: int) -> bool:
         return p.returncode == 0 and path.exists() and path.stat().st_size > 1000
     except Exception:
         return False
-
 
 def speak(
     home: Home,
@@ -177,18 +163,15 @@ def speak(
 
     return {"ok": False, "error": "没有可用的合成后端（Windows 用 SAPI，Linux 装 espeak-ng，macOS 自带 say）"}
 
-
 def sing(home: Home, text: str, **kw) -> dict[str, Any]:
     """降级版"唱"：TTS 慢速 + 拖腔。真 SVC 需要她自己的音色模型，不在这一层。"""
     return speak(home, text, kind="sing", rate=0.78, **kw)
-
 
 def available() -> dict[str, bool]:
     out = {"edge-tts": bool(shutil.which("edge-tts")), "say": bool(shutil.which("say")),
            "espeak": bool(shutil.which("espeak-ng") or shutil.which("espeak"))}
     out["sapi"] = sys.platform == "win32"
     return out
-
 
 def last(home: Home, n: int = 5) -> list[dict[str, Any]]:
     return home.read_jsonl("logs/voice.jsonl", limit=n)

@@ -12,6 +12,7 @@ import struct
 from pathlib import Path
 from typing import Any
 
+from .store import Home
 from .imgpng import _shot_path
 from .devwin import screenshot_desktop
 
