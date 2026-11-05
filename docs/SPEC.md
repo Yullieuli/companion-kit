@@ -418,7 +418,7 @@ TOML 只做"追加一个表"，JSON5 用一个 60 行的宽松解析器做校验
 | 节 | 状态 | 实测说明 |
 |---|---|---|
 | §4 三层架构 | ✅ | core 无宿主 import、无网络请求（`grep` 确认无 requests/urllib 直连）；契约层 ①MCP ✅ ②Context（CLI + HTTP `/context`）✅ ③事件（CLI + HTTP `/events` 长轮询）✅ ④文件协议 ✅。**适配器层只落地了 bili / vision / tts / phone**——联网搜索由 hermes 自带、ASR 由宿主 whisper 插件负责（core 不重复实现），`qzone` 不做 |
-| §5.1 MCP 工具 | ✅ | 规格 8 个全部覆盖：`companion_context` / `companion_react` / `companion_say` / `companion_life_record` / `companion_mood` / `companion_person` / `companion_tick` / `companion_bili`。**对外 34 个工具**（多出 opinion / fence / status / events / memory / group / sticker×6 / cost / voice / ask / resume / distill / watchdog / device_* 共 24 个） |
+| §5.1 MCP 工具 | ✅ | 规格 8 个全部覆盖：`companion_context` / `companion_react` / `companion_say` / `companion_life_record` / `companion_mood` / `companion_person` / `companion_tick` / `companion_bili`。**对外 35 个工具**（多出 opinion / fence / status / events / memory / group / sticker×6 / cost / voice / ask / resume / distill / watchdog / device_* 共 24 个） |
 | §5.2 Context 注入 | ✅ | 六块实测齐全：`soul` `state` `memory` `person` `opinion` `life`（写进记忆/人物/观点/生活后逐块出现，块名 `person` 而非 `people`）；块 hash 投影去重实测：状态没变返回**空文本**（`reason=状态没变，不用重复注入`），第 7 轮强制全量；指纹存 `context/projection.json` 跨重启有效。**口径收紧了**（2026-10-29 第一次真实对话后）：`life` 只给已说出口的（shared）、`opinion` 只给已想定的（belief）——未说出口的私事与未定型的猜测不该占上下文，更不该被拿来硬答主人的问题 |
 | §5.3 事件订阅 | ✅ | append-only + cursor + 长轮询；`events.poll(since=0)` 实测返回事件且 `advance=False` 不推进共享 cursor；HTTP `/events` 只读、默认绑 127.0.0.1 |
 | §5.4 文件协议 | ✅ | 实测 init 后目录与 SPEC 对齐（`bili/traffic.json`、`shots/bili/*` 为按需创建，非缺件）；两处**有意偏差**已在 §5.4 正文标注（`people` 用 json、`life` 用单文件） |

@@ -237,7 +237,6 @@ def main() -> int:
     # 不记的话 companion 永远以为他刚说过话，衰减机制等于没开。
     # 按 (turn_id + 正文) 去重：一次用户消息会触发多次 LLM 调用（工具循环），
     # 不去重的话 turns 会被同一条消息刷满，`_owner_last_seen` 也会被推到现在。
-    gap_hours = 0.0
     if user_text.strip():
         try:
             import hashlib
@@ -252,15 +251,6 @@ def main() -> int:
             except Exception:
                 pass
             if udigest != last:
-                # 上次他说话是多久以前：用来判断"他隔了很久才回来"
-                try:
-                    prev = [r for r in home.read_jsonl("logs/turns.jsonl", limit=200)
-                            if r.get("role") == "user" and r.get("at")]
-                    if prev:
-                        then = datetime.fromisoformat(str(prev[-1]["at"]))
-                        gap_hours = max(0.0, (datetime.now() - then).total_seconds() / 3600.0)
-                except Exception:
-                    gap_hours = 0.0
                 home.append_jsonl("logs/turns.jsonl", {
                     "at": datetime.now().isoformat(timespec="seconds"),
                     "role": "user", "platform": platform, "chars": len(user_text),

@@ -124,6 +124,9 @@ TOOLS: list[Tool] = [
     _schema("companion_sticker_seed", "播种内置表情库（每个情绪两张）。库里空的时候先跑一次。",
             {"force": {"type": "boolean", "default": False,
                        "description": "true 会覆盖已存在的内置表情"}}),
+    _schema("companion_sticker_remove", "从表情库里删掉一张（挑错了、重复了、不想再用）。",
+            {"name": {"type": "string",
+                      "description": "sticker_add / sticker_stats 返回的那个 name"}}, ["name"]),
     _schema("companion_web_read", "把一个网页变成能进上下文的一段话：抽正文 + 摘要 + 缓存。"
                                   "搜索由宿主做，这里只处理已经拿到的 HTML；"
                                   "外部文本会自动过围栏消毒。",
@@ -161,10 +164,13 @@ TOOLS: list[Tool] = [
              "id": {"type": "string"}}, []),
     _schema("companion_bili",
             "刷 B 站：tick=挑一条并读完（返回素材，不返回长文案）/ debrief=只读某条 / "
-            "commit=回填她自己的感受 / share=分享给主人 / status=今天刷了几条、还能不能刷。",
+            "commit=回填她自己的感受 / share=分享给主人 / comment=在评论区留一句 / "
+            "status=今天刷了几条、还能不能刷。",
             {"action": {"type": "string",
-                        "enum": ["tick", "debrief", "commit", "share", "status"], "default": "status"},
+                        "enum": ["tick", "debrief", "commit", "share", "comment", "status"],
+                        "default": "status"},
              "bvid": {"type": "string"}, "summary": {"type": "string"},
+             "text": {"type": "string", "description": "comment 时就是评论正文（≤1000 字）"},
              "rating": {"type": "integer"}, "score": {"type": "integer"},
              "reason": {"type": "string"}, "to_mid": {"type": "integer"},
              "via": {"type": "string"}, "frames": {"type": "boolean"},
@@ -377,6 +383,12 @@ def _t_sticker_mark_sent(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, **sticker.stats(home)}
 
 
+def _t_sticker_remove(home: Home, a: dict[str, Any]) -> dict[str, Any]:
+    if not sticker.remove(home, str(a.get("name") or "")):
+        return {"ok": False, "error": "库里没有这张"}
+    return {"ok": True, **sticker.stats(home)}
+
+
 def _t_sticker_extract(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     """自动收一张图进表情库：认情绪、打标签。
 
@@ -532,6 +544,31 @@ def _t_bili(home: Home, a: dict[str, Any]) -> dict[str, Any]:
         return bili.share(home, a["bvid"], a.get("summary") or "",
                           score_v=int(a.get("score") or 0), reason=a.get("reason") or "",
                           to_mid=a.get("to_mid"), via=via, net=net)
+    if action == "comment":
+        # 评论区留言。设计上只当补充渠道：B 站对陌生人的评论有影子审核，
+        # 常常只有自己刷得到（attr 的隐藏位），所以发完立刻验一次，
+        # 把 verdict 如实告诉她，别让她以为说出去了。
+        import time as _time
+
+        from .bilinet import Net
+
+        bvid = str(a.get("bvid") or "")
+        text = str(a.get("text") or "").strip()
+        if not (bvid and text):
+            return {"ok": False, "why": "comment 需要 bvid 和 text"}
+        net = Net(home.root)
+        info = net.view(bvid) or {}
+        aid = int(info.get("aid") or 0)
+        if not aid:
+            return {"ok": False, "why": f"拿不到 {bvid} 的 aid"}
+        sent = net.send_comment(bvid, aid, text)
+        _time.sleep(4)  # 刚发的评论不一定立刻进列表，等一拍再验
+        ver = net.verify_comment(aid, sent.get("rpid") or "")
+        return {
+            "ok": True, **sent, "verify": ver,
+            "note": ("verdict=public 才是陌生人也看得见；self_only 表示只有你自己刷得到，"
+                     "那条就别指望有人回——真要让人看见，走 share(via='dm') 私信"),
+        }
     return {"ok": False, "why": f"不认识的动作 {action}"}
 
 
@@ -587,6 +624,7 @@ HANDLERS: dict[str, Callable[[Home, dict[str, Any]], dict[str, Any]]] = {
     "companion_sticker_mark_sent": _t_sticker_mark_sent,
     "companion_sticker_extract": _t_sticker_extract,
     "companion_sticker_seed": _t_sticker_seed,
+    "companion_sticker_remove": _t_sticker_remove,
     "companion_web_read": _t_web_read,
     "companion_web_pick": _t_web_pick,
     "companion_person": _t_person,

@@ -40,7 +40,8 @@ from .devcdp import (BrowserError, browser_click, browser_key, browser_look,
 from .devwin import (DesktopError, click, drag, focus as focus_window, foreground,
                      key as press_key, screen_origin, screen_size, screenshot_desktop,
                      screenshot_window, type_text, window_rect, windows as list_windows)
-from .imgpng import _shot_path, write_png
+from .imgpng import _shot_path
+from .imgpng import write_png  # noqa: F401 —— 测试拿 device.write_png 当转出口，别删
 
 LOG = "logs/device.jsonl"
 STATE = "devices.json"

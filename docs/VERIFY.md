@@ -17,7 +17,7 @@
 |---|---|---|---|
 | 1 | 全量单测（Windows） | `python -m unittest discover -s tests -q` → `Ran 676 tests ... OK` | ✅ |
 | 2 | 全量单测（Linux） | WSL 同一命令（复制到 `/tmp` 原生目录）→ `Ran 676 tests ... OK` | ✅ 同一份代码双平台绿 |
-| 3 | MCP 协议（真子进程） | `tests/test_mcp_protocol.py` 5 例：握手协商 `2025-06-18`、34 工具、未知工具 `-32601`、坏 JSON `-32700`、通知不回包 | ✅ |
+| 3 | MCP 协议（真子进程） | `tests/test_mcp_protocol.py` 5 例：握手协商 `2025-06-18`、35 工具、未知工具 `-32601`、坏 JSON `-32700`、通知不回包 | ✅ |
 | 4 | MCP 在 GBK 环境下的编码 | 以 `PYTHONIOENCODING=gbk` 起进程，stdout 仍是合法 UTF-8 JSON（修复前解不开） | ✅ |
 | 5 | 真实 MCP 客户端 | `openclaw mcp add companion-probe --command .../companion --arg mcp` → `26 tools, Codex approval auto`，注解齐全无警告 | ✅ |
 | 6 | 本地安装脚本（Linux） | 干净 venv 跑 `sh install.sh --from . --no-path --no-init` → 装上 0.3.0，`sh` 自动切 bash | ✅ |
@@ -37,7 +37,7 @@
 | 20 | hermes 安装器 `--apply`（WSL） | 沙箱 HOME：生成 5 个 wrapper + 拷贝适配层 → 实跑 `companion_ctx.sh` 出真实上下文、`companion.sh --json cost` 正常；解释器缺失时 exit 1 且不写坏 wrapper | ✅ |
 | 21 | hermes hook 本体 | `{"session_id":"t","platform":"napcat","user_message":"在吗"}` \| `companion_hook.sh` → 返回注入上下文 JSON | ✅ |
 | 22 | DSH 适配器实跑 | 真插件（Node 22）+ 真 core：tick → 拉事件 → `agent.followup` 投递 wake_due → `dsh.cursor` 推进到 1、`logs/delivery.jsonl` 落档 | ✅ 适配层逻辑通（真实 dsh 客户端仍缺，见 §三） |
-| 23 | MCP stdio 真实握手 | 真子进程按行 JSON-RPC：initialize 协商 `2025-03-26`、34 工具、context 正常、`device_look` 默认拒绝（"没开"）、`companion_react` 同 turn_id 第二次 `duplicate=true`、stderr 为空 | ✅ |
+| 23 | MCP stdio 真实握手 | 真子进程按行 JSON-RPC：initialize 协商 `2025-03-26`、35 工具、context 正常、`device_look` 默认拒绝（"没开"）、`companion_react` 同 turn_id 第二次 `duplicate=true`、stderr 为空 | ✅ |
 | 24 | 跨板块不干扰/不重复消耗 | 并发探针：两宿主同时 tick 只剩 1 次开口额度 + 1 条 wake_due；说话额度与 bili 桶互不影响；`events --since` 不推进共享 cursor；重复 react 心情只 +10、账本只 1 行 | ✅ |
 | 25 | Docker 镜像 | `Dockerfile` 三阶段构建通过；`docker build --target test` **构建时容器内跑 676 项单测全绿** | ✅ |
 | 26 | 容器内运行 | `companion doctor` 正常（正确标注 devwin 仅 Windows、adb/ffmpeg/edge-tts 未装会降级）；`/context` `/events` HTTP 端点返回正常；健康检查 healthy | ✅ |
@@ -50,7 +50,7 @@
 | 33 | ask 待办呈现 | hermes 钩子注入「等你点头」块（有 pending 时出现，无 pending 时不出现）；DSH 侧实跑投递了「我想电脑上打开chrome，可以吗？（等你点个头…）」，且第二轮不重复催 | ✅ |
 | 34 | DSH 动作分发 | `bili_due` → 调 `companion bili tick`（无凭证时安静失败不崩）；新增 `/dsh-companion/react` 写回路由；CLI `react` 补 `--turn-id` / `--usage` 并实测幂等 | ✅ |
 | 35 | 斗图上限闭环 | 新增 MCP `companion_sticker_mark_sent`；`sticker.stats` 返回已发次数；实测记一次后 sent=1 | ✅ |
-| 36 | **SPEC 逐条核对（10-29）** | 写探针跑真实 API（不读文档自证）：§5.1 八工具映射全中（实际 34 个）、§5.2 六块齐全 + 投影去重返回空文本、§5.5 五道闸逐条拒、§5.7 预算闸超限返回 False、§5.8 七候选 + 额度用尽转 diary、§7.1 单轴 ±12 锁住 + 24h 回归 0、§7.2 睡眠/窗口判定、§8 静默衰减 1/3/7/10 天 → 8/1/0/0 | ✅ |
+| 36 | **SPEC 逐条核对（10-29）** | 写探针跑真实 API（不读文档自证）：§5.1 八工具映射全中（实际 35 个）、§5.2 六块齐全 + 投影去重返回空文本、§5.5 五道闸逐条拒、§5.7 预算闸超限返回 False、§5.8 七候选 + 额度用尽转 diary、§7.1 单轴 ±12 锁住 + 24h 回归 0、§7.2 睡眠/窗口判定、§8 静默衰减 1/3/7/10 天 → 8/1/0/0 | ✅ |
 | 37 | **core 覆盖率** | `coverage run` + 按 SPEC §9 口径（"adapter 只测契约不测实现"）统计**纯逻辑 core 22 模块 = 94%** ≥ 90%（新增 `hosthooks.py` 后微降，该模块单独 91%）；已加 CI `coverage` job 守门 | ✅ |
 | 38 | CLI 24 个子命令契约 | 原来只测了 5 个；现在每个子命令都有"能调通 + 退出码正确 + 出错时如实说明"的用例（44 项） | ✅ |
 | 39 | **H1 打字延迟** | `typing.py`：按字数分三档（≤6 字 0.8–1.8s / 7–30 字 1.5–3.5s / 更长 3–6.5s），忙时 ×1.4、凌晨 ×1.6、上限 8s；`guard.say` 与 `drive.tick` 都返回 `typing_ms`/`typing_seconds` | ✅ |
@@ -107,7 +107,7 @@
 | 心情推力 | 通道通了（§一 52），但还没在真实对话里推过 | `companion mood` 的数值离开 0 |
 | 被回应结账 | `initiative/feedback.json` 有 `last_at`、`settled=0`，还没遇到 TO_OWNER 动作 | 她主动说话后 6 小时内你回一句，`settled` +1 |
 | **修复后的对话质量** | 第一轮真实对话是"答非所问"，**原因是写回断了 + 上下文全是噪音**（§一 51–53）。这两条都修了，但**还没用新通道再跑一轮** | 主人问"做完有啥用"，她正面回答，而不是分析"你为什么没动力" |
-| codex 本体 | 本机没装 codex；用 MCP stdio 真握手（§一 23）+ openclaw（同一套 MCP）代验协议 | `codex mcp` 里能看到 34 个工具 |
+| codex 本体 | 本机没装 codex；用 MCP stdio 真握手（§一 23）+ openclaw（同一套 MCP）代验协议 | `codex mcp` 里能看到 35 个工具 |
 | dsh 桌面端 | 没装 dsh；适配层逻辑已用桩件实跑（§一 22） | 装上后 `/dsh-companion/status` 有返回、tick 能投递 |
 | Docker 镜像分发 | 本地构建已实测；没有 registry 仓库，CI 也没有推送步骤 | 推到 registry 或 GHCR，`docker pull` 后 `companion doctor` 正常 |
 | macOS / Linux 桌面 | 无真机；代码路径明确抛 `DesktopError` | 装 macOS/Linux 后截图 + 输入实测 |
@@ -147,7 +147,7 @@
 
 1. **MCP 输出不是 UTF-8**：Windows 控制台 GBK 时中文写成 GBK 字节，客户端 JSON 解析失败 → 进程启动时强制 utf-8（`test_context_returns_utf8_json`）
 2. **协议版本写死**：客户端要 `2025-06-18` 也回 `2024-11-05` → 按客户端支持协商；`serverInfo.version` 从 `0.1.0` 改为真实版本
-3. **工具没有安全注解**：openclaw 提示"每次调用都要批准" → 全部 34 个工具都加 `readOnlyHint/destructiveHint/openWorldHint`，真实客户端复验无警告
+3. **工具没有安全注解**：openclaw 提示"每次调用都要批准" → 全部 35 个工具都加 `readOnlyHint/destructiveHint/openWorldHint`，真实客户端复验无警告
 4. **额度可能扣两次**：drive 决策扣一次、`say` 再扣一次 → 加"票"（一次性 / 20 分钟 / 绑定动作）
 5. **事件游标被抢**：dsh 传 `since` 也推进全局 cursor，人再读就空了 → 显式 `since` 不再写全局
 6. **安装脚本版本漂移**：三处版本号各自维护 → 单一来源 + 测试守着；`--from` 前补 setuptools；`sh` 调用自动切 bash；ps1 补 `-From`

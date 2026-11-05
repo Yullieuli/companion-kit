@@ -202,7 +202,7 @@ companion bili status                   # 今天刷了几条、还能不能刷
 companion bili tick                     # 自己挑一条、读完、记进生活流水
 companion bili commit BV1xx411c7mD --summary "关卡设计讲透了" --rating 8
 companion bili share BV1xx411c7mD --score 15 --reason "他肯定喜欢这个战斗系统"
-companion mcp --list                    # 列出 34 个 MCP 工具
+companion mcp --list                    # 列出 35 个 MCP 工具
 ```
 
 **676 个单测**，全部离线可跑（B 站用假总线，不碰网络）。其中 9 个是契约/回放：
@@ -222,7 +222,7 @@ CLI、MCP、直接调用三方拼出的上下文必须逐字节一致，真实�
 | **表情**（M4） | 按情绪目录 + 标签挑，最近发过的降权，没有对得上的**就不发**；**内置 16 张**（`init` 自动播种）+ **自动提取**（认情绪、打标签） |
 | **请示**（§5.5） | 动手前先问一声；主人在聊天里回一句就自动落账；**模型自己批的票开不了设备**——那等于它替主人答应了 |
 | **网页**（F 组） | 抽正文 → 摘要 → 挑页 → 缓存；外部文本先过围栏消毒 |
-| **MCP**（M6） | 34 个工具，stdio JSON-RPC（强制 UTF-8）；codex / openclaw / 任何 MCP 客户端可直接挂 |
+| **MCP**（M6） | 35 个工具，stdio JSON-RPC（强制 UTF-8）；codex / openclaw / 任何 MCP 客户端可直接挂 |
 
 **验证到哪一步了**：见 [docs/VERIFY.md](docs/VERIFY.md)（哪些实测通过、哪些只做了一半、哪些还没验）。
 

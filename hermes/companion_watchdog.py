@@ -89,7 +89,6 @@ def main() -> int:
     except Exception:
         state["pending_turns"] = 0
 
-    fixed = False
     if args.fix and state.get("state") in ("stale", "dead"):
         if not RESTART_CMD:
             state["fix"] = "没配 COMPANION_RESTART_CMD，只报不改"
@@ -97,7 +96,7 @@ def main() -> int:
             try:
                 subprocess.run(RESTART_CMD, shell=True, check=False, timeout=60)
                 state["fix"] = f"已执行重启：{RESTART_CMD}"
-                fixed = True
+                state["fixed"] = True
             except Exception as e:
                 state["fix"] = f"重启失败：{type(e).__name__}: {e}"
 
