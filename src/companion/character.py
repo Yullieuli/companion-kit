@@ -265,9 +265,12 @@ def render(home: Home, *, min_strength: float = RENDER_AT, limit: int = 5,
     只写"倾向"不写强度数字——数字是给人查的，不是给她念的。
     也不写来源，否则模型会把"你看过三支评测"当成台词说出来。
 
-    两类倾向分开说：``taste.like`` 里的词是**具体对象**（某个 UP、某个系列），
-    「常看谁」；其余是**方向**，「在意什么」。混在一起说会变成
+    两类倾向分开说：``taste.subjects`` 里列的是**具体对象**（某个 UP、某个系列），
+    说成「常看谁」；其余是**方向**，说成「在意什么」。混在一起说会变成
     「你越来越在意极客湾」——像在念广告词。
+
+    2026-11-05 起对象改由 ``taste.subjects`` 显式声明：``taste.like`` 已经清成
+    纯方向词（纪录片/手工/科普…），拿它判断对象会让「常看的是」永远为空。
     """
     rows = traits(home, min_strength=min_strength)[:limit]
     if not rows:
@@ -275,12 +278,13 @@ def render(home: Home, *, min_strength: float = RENDER_AT, limit: int = 5,
     try:
         from . import bili as bili_mod
 
-        likes = {str(w) for w in ((bili_mod.config(home).get("taste") or {}).get("like") or []) if w}
+        taste = (bili_mod.config(home).get("taste") or {})
+        subjects_cfg = {str(w) for w in (taste.get("subjects") or []) if w}
     except Exception:
-        likes = set()
+        subjects_cfg = set()
 
-    fields = [n for n, _s, _e in rows if n not in likes]
-    subjects = [n for n, _s, _e in rows if n in likes]
+    fields = [n for n, _s, _e in rows if n not in subjects_cfg]
+    subjects = [n for n, _s, _e in rows if n in subjects_cfg]
 
     parts: list[str] = []
     if fields:

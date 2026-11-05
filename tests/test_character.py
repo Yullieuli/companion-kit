@@ -104,6 +104,11 @@ class CharacterTest(unittest.TestCase):
 
     def test_render_splits_subjects_from_fields(self) -> None:
         """常看的对象和在意方向要分开说，不能混成一句广告词。"""
+        from companion import bili
+
+        cfg = bili.config(self.home)
+        cfg["taste"] = {**cfg["taste"], "subjects": ["极客湾"]}
+        bili.save_config(self.home, cfg)
         for i in range(4):
             self._life(f"刷片{i}", ["极客湾", "芯片能效"], days_ago=i + 1)
         character.rebuild(self.home, now=self.now)

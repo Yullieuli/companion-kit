@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 from . import __version__
 from . import context as context_mod
-from . import ask as ask_mod, bili, cost, device, distill as distill_mod, drive, events, fence, group, life, memory, mood as mood_mod, opinion, people, react as react_mod, resume as resume_mod, sticker, voice
+from . import ask as ask_mod, bili, cost, device, distill as distill_mod, drive, events, fence, group, life, memory, mood as mood_mod, opinion, people, react as react_mod, relay, resume as resume_mod, sticker, voice
 from .store import Home
 
 PROTOCOL = "2024-11-05"
@@ -356,7 +356,9 @@ def _t_sticker_pick(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     hit = sticker.pick(home, a.get("mood") or "", a.get("tags") or [])
     if not hit:
         return {"ok": False, "error": "库里没有对得上的，这条就纯文字吧"}
-    return {"ok": True, **hit}
+    # 顺手搬到 NapCat 共享目录，返回值里带 cq —— 她拿到就能直接发，
+    # 不用自己拼路径（拼了也发不出去，容器看不见 ~/.companion）
+    return relay.attach({"ok": True, **hit})
 
 
 def _t_sticker_add(home: Home, a: dict[str, Any]) -> dict[str, Any]:
@@ -489,7 +491,8 @@ def _t_cost(home: Home, a: dict[str, Any]) -> dict[str, Any]:
 def _t_voice(home: Home, a: dict[str, Any]) -> dict[str, Any]:
     text = a.get("text") or ""
     r = voice.sing(home, text) if a.get("sing") else voice.speak(home, text)
-    return r
+    # 语音同理：wav 落在 ~/.companion，容器读不到，搬过去才发得出去
+    return relay.attach(r, kind="record")
 
 
 def _t_ask(home: Home, a: dict[str, Any]) -> dict[str, Any]:
@@ -546,7 +549,8 @@ def _t_look(home: Home, a: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": v.reason}
     if a.get("ocr"):
         return device.observe(home, target, window=window, ocr=True)
-    return device.look(home, target, window=window)
+    # 截图同样搬到共享目录：不然她截了也发不出去
+    return relay.attach(device.look(home, target, window=window))
 
 
 def _t_act(home: Home, a: dict[str, Any]) -> dict[str, Any]:
