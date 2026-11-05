@@ -9,6 +9,17 @@ on:
   pull_request:
   workflow_dispatch:
 
+# 2026-11-05：所有 job 统一钉 UTF-8。
+# ubuntu runner 的 locale 不保证是 UTF-8，中文文件名（测试里造「好困啊.png」）
+# 写进去读出来就对不上，关键词识别落空、掉到像素分支（报 '安慰' != '困'）。
+# 一开始只配在 test job 里，结果 coverage job 用同一份测试照样红——
+# 这种事必须写在顶层，不能一个 job 一个 job 补。
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+
 jobs:
   test:
     name: test ${{ matrix.os }} / py${{ matrix.python }}
@@ -16,14 +27,7 @@ jobs:
     # Windows runner 的默认编码是 cp1252（en-US），而 `unittest -v` 会把每个
     # 测试的中文 docstring 打到 stdout —— cp1252 编不了，整个测试进程崩。
     # CLI 自己已经兜了（boot._force_utf8），但测试进程不经过 CLI 入口。
-    env:
-      PYTHONUTF8: "1"
-      PYTHONIOENCODING: "utf-8"
-      # 2026-11-05：ubuntu-latest + py3.12 这一格红过 —— 中文文件名
-      # （测试里造「好困啊.png」）读出来和写进去对不上，关键词识别必然落空。
-      # runner 的 locale 不保证是 UTF-8，显式钉死。
-      LANG: C.UTF-8
-      LC_ALL: C.UTF-8
+    # 编码相关的 env 已经提到顶层（所有 job 都要），这里不再重复。
     strategy:
       fail-fast: false
       matrix:
