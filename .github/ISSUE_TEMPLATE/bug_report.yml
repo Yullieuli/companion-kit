@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         先跑一次 `companion doctor`，它的输出能省掉一半来回。
-        如果是**安全问题**（凭据泄露、权限绕过、注入），请不要在这里发，走 [SECURITY.md](../blob/main/SECURITY.md)。
+        如果是**安全问题**（凭据泄露、权限绕过、注入），请不要开公开 issue。
 
   - type: dropdown
     id: host

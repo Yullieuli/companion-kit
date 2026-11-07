@@ -344,8 +344,8 @@ M0 骨架 → M1 时钟+心情+上下文 → M2 主动+hermes → M3 记忆+人�
 
 ## License
 
-MIT，见 [LICENSE](LICENSE)。
+MIT。
 
 ---
 
-参与开发看 [CONTRIBUTING.md](CONTRIBUTING.md) ｜ 安全问题走 [SECURITY.md](SECURITY.md)（不要开公开 issue）｜ 变更记录在 [CHANGELOG.md](CHANGELOG.md)
+变更记录在 [CHANGELOG.md](CHANGELOG.md)
