@@ -797,6 +797,73 @@ def cmd_connect(home: Home, args) -> int:
     return 0
 
 
+def _readiness(home: Home) -> list[dict[str, Any]]:
+    """装完能不能干活 —— 和「模块导得进」是两件事。
+
+    2026-11-06：之前 doctor 只查 import，全绿但新机器上她一句话都主动说不出来、
+    一张片都刷不了，因为人设是占位模板、B 站没登录。那些都不报错，只是静默不做事。
+    """
+    out: list[dict[str, Any]] = []
+
+    # ① 人设：init 写的模板长这样，含占位提示
+    try:
+        soul = home.soul()
+    except Exception:
+        soul = ""
+    placeholder = "写完这几行她才知道自己是谁" in soul or len(soul.strip()) < 80
+    out.append({
+        "item": "人设",
+        "ok": not placeholder,
+        "detail": ("SOUL.md 还是 init 的占位模板 —— 她能说话，但不知道自己是谁"
+                   if placeholder else f"SOUL.md 有 {len(soul.strip())} 字"),
+        "fix": f"改 {home.root / 'SOUL.md'}（hermes 用 ~/.hermes/SOUL.md）",
+    })
+
+    # ② B 站凭证：没有的话 tick 会安静跳过，不报错
+    try:
+        from . import bilinet
+
+        cred = bilinet.credential_path(home.root)
+        has = bool(cred) and Path(cred).is_file()
+    except Exception:
+        has = False
+    out.append({
+        "item": "B 站",
+        "ok": has,
+        "detail": ("还没登录 —— 刷片功能会静默跳过，不报错" if not has else "凭证在"),
+        "fix": (f"把 credential.json 放进 {home.root / 'bili'}  "
+                f"（字段 sessdata/bili_jct/buvid3，形状同一个正常 bilibili-cli 的凭证文件）；"
+                f"放好后用 `companion bili me` 验证"),
+    })
+
+    # ③ 表情库：空库时她一张都发不出去
+    try:
+        from . import sticker
+
+        n = int(sticker.stats(home).get("total") or 0)
+    except Exception:
+        n = 0
+    out.append({
+        "item": "表情",
+        "ok": n > 0,
+        "detail": (f"{n} 张" if n else "一张都没有 —— 想发表情时没得挑"),
+        "fix": "companion sticker seed（init 会自动播一次）",
+    })
+
+    # ④ 生活记录：空的不是错，但说明她还没开始过日子
+    try:
+        rows = len(home.read_jsonl("life/life.jsonl", limit=100000))
+    except Exception:
+        rows = 0
+    out.append({
+        "item": "生活",
+        "ok": rows > 0,
+        "detail": (f"{rows} 条记录" if rows else "还没记录 —— 刷片/聊天后会自己长"),
+        "fix": "不用管；她做过事就会写进来",
+    })
+    return out
+
+
 def cmd_doctor(home: Home, args) -> int:
     """体检：版本、路径、模块能不能导入、外部工具在不在、以及给杀软的白名单建议。"""
     import importlib
@@ -848,6 +915,7 @@ def cmd_doctor(home: Home, args) -> int:
         "modules": checks,
         "limited": [c["item"] for c in checks if c.get("note")],
         "external": tools,
+        "readiness": _readiness(home),
         "pyc_count": len(pyc),
         "host_hooks": _host_hook_report(),
         "av_hint": {
@@ -885,6 +953,12 @@ def cmd_doctor(home: Home, args) -> int:
             print(f"               · {h['detail']}")
             for m in h["missing"]:
                 print(f"                 {m['event']} → {m['command']}")
+    print()
+    for c in payload["readiness"]:
+        mark = "✓" if c["ok"] else "·"
+        print(f"  {mark} {c['item']:10} {c['detail']}")
+        if not c["ok"]:
+            print(f"               → {c['fix']}")
     print()
     print(f"  __pycache__ 里 {payload['pyc_count']} 个 .pyc")
     if payload["pyc_count"]:

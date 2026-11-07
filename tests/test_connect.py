@@ -175,6 +175,57 @@ class YamlTest(unittest.TestCase):
 # ── 四个宿主 ─────────────────────────────────────────────────
 
 
+class WakeCronTest(_Tmp):
+    """装完必须会自己开口。
+
+    只装 hooks + MCP 的话她是「只会回答」的：能聊、能刷片、能发表情，
+    但永远不会主动说话。2026-11-06 之前 cron 一直是手工加的，
+    所以「空机器装完」和「她能过日子」之间差着一整块。
+    """
+
+    def _host(self) -> connect.HermesHost:
+        self.write("hermes/config.yaml", "hooks: {}\n")
+        host = connect.HermesHost(self.home, self.opts())
+        self.assertTrue(host.detect(), host.reason)
+        return host
+
+    def test_plan_includes_wake_cron(self) -> None:
+        host = self._host()
+        notes = [s.note for s in host.plan()]
+        self.assertTrue(any("定时叫醒" in n for n in notes), notes)
+
+    def test_installs_once_and_is_idempotent(self) -> None:
+        host = self._host()
+        step = next(s for s in host.plan() if "定时叫醒" in s.note)
+        step.fn()
+        path = self.base / "hermes" / "cron" / "jobs.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(len(data["jobs"]), 1)
+        self.assertEqual(data["jobs"][0]["name"], connect.WAKE_JOB_NAME)
+        self.assertIn("*/15", data["jobs"][0]["schedule"]["expr"])
+        # 再跑一次不该多一条
+        step.fn()
+        again = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(len(again["jobs"]), 1)
+
+    def test_keeps_existing_jobs(self) -> None:
+        self.write("hermes/cron/jobs.json",
+                   json.dumps({"jobs": [{"id": "x1", "name": "别人的任务"}],
+                               "updated_at": "2026-01-01"}, ensure_ascii=False))
+        host = self._host()
+        next(s for s in host.plan() if "定时叫醒" in s.note).fn()
+        data = json.loads((self.base / "hermes" / "cron" / "jobs.json").read_text(encoding="utf-8"))
+        names = [j["name"] for j in data["jobs"]]
+        self.assertIn("别人的任务", names)
+        self.assertIn(connect.WAKE_JOB_NAME, names)
+        self.assertEqual(len(names), 2)
+
+    def test_wake_prompt_has_no_persona(self) -> None:
+        """提示词不能写死名字和口癖 —— 新机器上的人格来自 SOUL.md。"""
+        for bad in ("柚璃", "本公主", "影之刃", "极客湾"):
+            self.assertNotIn(bad, connect.WAKE_PROMPT)
+
+
 class HostDetectTest(_Tmp):
     def test_nothing_installed(self):
         results = connect.run(self.home, None, opts=self.opts())

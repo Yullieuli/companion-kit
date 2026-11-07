@@ -36,7 +36,9 @@ import subprocess
 import sys
 import sysconfig
 import time
+import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -733,6 +735,32 @@ HERMES_SCRIPTS = [
 ]
 
 
+WAKE_JOB_NAME = "定时叫醒·她主动找你"
+
+# 通用唤醒提示：不写死名字、口癖、主人称呼 —— 那些在 SOUL.md 里。
+# 换台机器装完，靠这条任务她才会主动开口；只装 hooks + MCP 的话，
+# 她是「只会回答」的：能聊、能刷片、能发表情，但永远不主动。
+WAKE_PROMPT = """这一轮是「事件门」把你叫起来的，不是主人发的消息。
+
+事件门的输出格式是：
+
+    WAKE|<理由>|<动作>
+
+中间那段是这次叫你的原因。**没有 WAKE 就代表没叫你**，直接回复 [SILENT]，一个字都别发。
+
+现在你自己决定：
+
+- 这个理由值得开口吗？不值得就 [SILENT]。沉默是允许的，也是加分项。
+- 想开口就 1~2 句，用你自己的人格文件（SOUL.md）里的口吻，别刷屏。
+- 别每次都问「在吗 / 在忙吗」。换花样：报状态、下结论、挑刺、吐槽。
+- 想知道自己的状态（几点、什么心情、今天说过几次话、最近在做什么），
+  先跑一句 `companion context --budget 400`，那是你自己的记录。
+
+要发出去就用宿主能发消息的工具（hermes 这里是 `napcat_send_message`，
+target_type 按当前会话填 private/group）；没有这个工具就 [SILENT]。
+"""
+
+
 class HermesHost(Host):
     name = "hermes"
     label = "hermes（Python 插件，hooks 注入）"
@@ -915,13 +943,52 @@ class HermesHost(Host):
         steps.append(
             Step(
                 "edit",
-                "挂上 MCP server（34 个工具；只挂 hooks 的话其余 31 个没人调）",
+                "挂上 MCP server（35 个工具；只挂 hooks 的话其余都没有人调）",
                 str(cfg_mcp),
                 path=cfg_mcp,
                 fn=patch_mcp,
             )
         )
+
+        # ⑥ 定时叫醒 —— 只装 hooks 和 MCP，她是「只会回答」的：能聊、能刷片、
+        # 能发表情，但永远不会主动开口。2026-11-06 之前这一步一直是手工加的，
+        # 所以「换台机器装完」和「她能自己过日子」之间差着一整块。
+        # optional：hermes 的 cron 结构变了也不该让整次 connect 回滚。
+        cron_path = self.root / "cron" / "jobs.json"
+        steps.append(
+            Step(
+                "write",
+                "装定时叫醒（每 15 分钟问一次该不该说话）",
+                str(cron_path),
+                path=cron_path,
+                fn=self._install_cron,
+                optional=True,
+            )
+        )
         return steps
+
+    def _install_cron(self) -> None:
+        """把「定时叫醒」写进 hermes 的 cron。已有同名任务就跳过（幂等）。"""
+        p = self.root / "cron" / "jobs.json"
+        try:
+            data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        except Exception:
+            data = {}
+        jobs = data.get("jobs") if isinstance(data.get("jobs"), list) else []
+        if any(str(j.get("name") or "") == WAKE_JOB_NAME for j in jobs):
+            return
+        jobs.append({
+            "id": uuid.uuid4().hex[:12],
+            "name": WAKE_JOB_NAME,
+            "schedule": {"kind": "cron", "expr": "*/15 * * * *", "display": "*/15 * * * *"},
+            "prompt": WAKE_PROMPT,
+        })
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            json.dumps({"jobs": jobs, "updated_at": datetime.now().isoformat(timespec="seconds")},
+                       ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     def verify(self) -> tuple[bool, str]:
         assert self.root is not None
