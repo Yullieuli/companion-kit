@@ -472,11 +472,31 @@ export default {
 
       regHtml('/dsh-companion/ui', () => PANEL_HTML())
 
+      // 自检信标：client 半在 factory / apply 两个节点各发一次，落到 store 的 logs 里。
+      // dsh 的插件加载失败大多静默（启动审计里记一笔就完了），
+      // 这是唯一不需要开浏览器 DevTools 就能判断「client 跑到哪一步」的手段。
+      reg('/dsh-companion/beacon', (req) => {
+        try {
+          const q = new URL(String((req && req.url) || ''), 'http://localhost').searchParams
+          const row = {
+            at: new Date().toISOString(),
+            stage: String(q.get('stage') || 'unknown').slice(0, 40),
+            detail: String(q.get('detail') || '').slice(0, 300),
+          }
+          const dir = path.join(home(), 'logs')
+          fs.mkdirSync(dir, { recursive: true })
+          fs.appendFileSync(path.join(dir, 'client-beacon.jsonl'), JSON.stringify(row) + '\n')
+          return { ok: true, stage: row.stage }
+        } catch (e) {
+          return { ok: false, error: String(e && e.message) }
+        }
+      })
+
       const limitOf = (req, dflt) => {
         try {
           const q = new URL(String((req && req.url) || ''), 'http://localhost').searchParams
           const n = Number(q.get('limit')) || dflt
-          return String(Math.max(1, Math.min(50, n)))
+          return String(Math.max(1, Math.min(300, n)))
         } catch {
           return String(dflt)
         }
@@ -485,6 +505,339 @@ export default {
       // /dsh-companion/status 已由下面的原实现提供（返回 {status, cost, home}），
       // 这里不再重复注册——同一个 path 注册两次行为依赖加载顺序，属于隐患。
       reg('/dsh-companion/mood', () => runJson(['mood']))
+
+      // ── 高级参数：按各自文件读写 ──────────────────────────
+      // 这些旋钮散在四个文件里（settings.json、bili/config.json、
+      // group/state.json、rhythm.json）。写错文件不会报错，只会静默不生效，
+      // 所以每一项都在表里写明落到哪个文件、哪条路径。
+      // [键, 组, 中文名, 文件, 路径, 类型, 最小, 最大, 默认值]
+      const PARAM_SPECS = [
+        // ── 心情 ──
+        ["mood.decay_hours", "心情", "回落到平静的小时数", "settings.json", ["mood", "decay_hours"], 'float', 1, 168, 36.0],
+        ["mood.cap_per_call", "心情", "单次心情最大变动", "settings.json", ["mood", "cap_per_call"], 'float', 0, 100, 12.0],
+        ["mood.cap_per_day.satisfaction", "心情", "满足感每天最多涨", "settings.json", ["mood_caps", "satisfaction"], 'float', 0, 100, 30.0],
+        ["mood.cap_per_day.closeness", "心情", "亲近感每天最多涨", "settings.json", ["mood_caps", "closeness"], 'float', 0, 100, 20.0],
+        ["mood_caps.energy", "心情", "精力每天最多降（负值）", "settings.json", ["mood_caps", "energy"], 'float', -100, 0, -6.0],
+        ["mood.low_threshold", "心情", "低潮判定阈值", "settings.json", ["mood", "low_threshold"], 'float', -100, 0, -30.0],
+        ["mood.low_hold_minutes", "心情", "低潮保持分钟数", "settings.json", ["mood", "low_hold_minutes"], 'int', 0, 1440, 30],
+        ["mood.baseline_half_life_days", "心情", "长期底色半衰期（天）", "settings.json", ["mood", "baseline_half_life_days"], 'float', 1, 365, 14.0],
+        ["mood.baseline_pull", "心情", "情绪改变底色的速度（0-0.5）", "settings.json", ["mood", "baseline_pull"], 'float', 0, 0.5, 0.01],
+        ["mood_rules.ignore_hours", "心情", "多久没回应算被冷落（小时）", "settings.json", ["mood_rules", "ignore_hours"], 'float', 0.5, 48, 4.0],
+        ["mood_rules.absence_days", "心情", "多久没见算「很久」（天）", "settings.json", ["mood_rules", "absence_days"], 'float', 0.5, 30, 3.0],
+
+        // ── 环境事件 ──
+        ["ambient.ignored.satisfaction", "环境事件", "被冷落：满足感变化", "settings.json", ["ambient", "ignored", "satisfaction"], 'float', -50, 0, -3.0],
+        ["ambient.late_night.energy", "环境事件", "深夜还醒着：精力变化", "settings.json", ["ambient", "late_night", "energy"], 'float', -50, 0, -2.0],
+        ["ambient.long_absence.closeness", "环境事件", "久别未见：亲近感变化", "settings.json", ["ambient", "long_absence", "closeness"], 'float', -50, 0, -1.0],
+
+        // ── B站 ──
+        ["bili.enabled", "B站", "刷片总开关", "bili/config.json", ["enabled"], 'bool', null, null, true],
+        ["bili.max_per_day", "B站", "每天最多刷几条", "bili/config.json", ["max_per_day"], 'int', 0, 50, 4],
+        ["bili.min_gap_min", "B站", "两条之间最少间隔（分钟）", "bili/config.json", ["min_gap_min"], 'int', 0, 1440, 90],
+        ["bili.min_score", "B站", "最低分才看", "bili/config.json", ["min_score"], 'int', 0, 10, 2],
+        ["bili.duration_min", "B站", "视频最短分钟", "bili/config.json", ["duration", "min_min"], 'int', 0, 120, 3],
+        ["bili.duration_max", "B站", "视频最长分钟", "bili/config.json", ["duration", "max_min"], 'int', 1, 600, 45],
+        ["bili.share.max_per_day", "B站", "每天最多分享几条", "bili/config.json", ["share", "max_per_day"], 'int', 0, 20, 2],
+        ["bili.share.min_score", "B站", "值得分享的最低分", "bili/config.json", ["share", "min_score"], 'int', 0, 10, 9],
+        ["bili.share.same_days", "B站", "重复分享间隔天数", "bili/config.json", ["share", "same_days"], 'int', 0, 90, 7],
+        ["bili.feeds", "B站", "片源", "bili/config.json", ["feeds"], 'strlist', null, null, ["popular", "related", "dynamic"]],
+        ["bili.taste.like", "B站", "口味词 · 喜欢", "bili/config.json", ["taste", "like"], 'strlist', null, null, ["纪录片", "手工", "科普", "独立游戏", "动漫"]],
+        ["bili.taste.dislike", "B站", "口味词 · 不喜欢", "bili/config.json", ["taste", "dislike"], 'strlist', null, null, ["营销号", "标题党", "擦边", "搬运", "切片", "合集"]],
+
+        // ── 说话额度 ──
+        ["quota.daily", "说话额度", "每天最多主动说几句", "settings.json", ["quota", "daily"], 'int', 0, 200, 8],
+        ["quota.gap_min", "说话额度", "两次开口最小间隔（分钟）", "settings.json", ["quota", "gap_min"], 'int', 0, 1440, 45],
+        ["quota.silent_cap", "说话额度", "沉默期的开口上限", "settings.json", ["quota", "silent_cap"], 'int', 0, 20, 1],
+
+        // ── 群聊 ──
+        ["group.reply_chance", "群聊", "群里接话概率（0-1）", "group/state.json", ["config", "reply_chance"], 'float', 0, 1, 0.22],
+        ["group.max_per_hour", "群聊", "每小时最多接几句", "group/state.json", ["config", "max_per_hour"], 'int', 0, 60, 4],
+        ["group.cooldown_min", "群聊", "两次接话冷却（分钟）", "group/state.json", ["config", "cooldown_min"], 'int', 0, 1440, 8],
+        ["group.min_chars", "群聊", "太短的消息不接（字数）", "group/state.json", ["config", "min_chars"], 'int', 0, 50, 2],
+        ["group.owner_boost", "群聊", "主人说话时接话加成", "group/state.json", ["config", "owner_boost"], 'float', 0, 1, 0.35],
+
+        // ── 自由时间 ──
+        ["initiative.free_time_max", "自由时间", "每天几段自由时间", "settings.json", ["initiative", "free_time_max"], 'int', 0, 12, 3],
+        ["initiative.min_samples", "自由时间", "动作反馈最少样本", "settings.json", ["initiative", "min_samples"], 'int', 1, 100, 3],
+        ["initiative.settle_hours", "自由时间", "反馈结算窗口（小时）", "settings.json", ["initiative", "settle_hours"], 'float', 0.5, 72, 6.0],
+
+        // ── 预算 ──
+        ["cost.daily_cny", "预算", "每日预算（元）", "settings.json", ["cost", "daily_cny"], 'float', 0.1, 500, 3.0],
+        ["cost.warn_at", "预算", "花到多少比例提醒（0-1）", "settings.json", ["cost", "warn_at"], 'float', 0, 1, 0.8],
+
+        // ── 性格 ──
+        ["character.half_life_days", "性格", "性格半衰期（天）", "settings.json", ["character", "half_life_days"], 'float', 1, 365, 45.0],
+        ["opinion.max_items", "性格", "观点库上限", "settings.json", ["opinion", "max_items"], 'int', 10, 500, 120],
+      ]
+
+      const SPECS = new Map(PARAM_SPECS.map((s) => [s[0], s]))
+      const paramPath = (rel) => path.join(home(), rel)
+
+      const readJson = (rel) => {
+        try {
+          const v = JSON.parse(fs.readFileSync(paramPath(rel), 'utf8'))
+          return v && typeof v === 'object' ? v : {}
+        } catch {
+          return {}
+        }
+      }
+
+      const getPath = (obj, parts) =>
+        parts.reduce((o, k) => (o && typeof o === 'object' ? o[k] : undefined), obj)
+
+      const setPath = (obj, parts, value) => {
+        let cur = obj
+        for (let i = 0; i < parts.length - 1; i++) {
+          const k = parts[i]
+          if (!cur[k] || typeof cur[k] !== 'object') cur[k] = {}
+          cur = cur[k]
+        }
+        cur[parts[parts.length - 1]] = value
+      }
+
+      const delPath = (obj, parts) => {
+        const parent = getPath(obj, parts.slice(0, -1))
+        if (parent && typeof parent === 'object') delete parent[parts[parts.length - 1]]
+      }
+
+      // 备份只留最近 5 份：每改一次参数就多一个文件，
+      // 不清理的话 ~/.companion 里几百个 .bak 会盖住真实文件。
+      const pruneBackups = (target, keep = 5) => {
+        try {
+          const dir = path.dirname(target)
+          const base = path.basename(target) + '.bak-'
+          // 只认自己写的 .bak-<ISO 时间戳>，别把 .bak-plugin / .bak-wipe
+          // 这类别的工具留下的备份一起算进来——那是在删别人的东西。
+          const isoBak = /\.bak-\d{4}-\d{2}-\d{2}T[\d-]+Z$/
+          const olds = fs.readdirSync(dir)
+            .filter((f) => f.startsWith(base) && isoBak.test(f))
+            .sort()
+            .reverse()
+          for (const f of olds.slice(keep)) {
+            try { fs.unlinkSync(path.join(dir, f)) } catch {}
+          }
+        } catch {}
+      }
+
+      const readBody = (req) =>
+        new Promise((resolve, reject) => {
+          let buf = ''
+          req.on('data', (c) => { buf += c })
+          req.on('end', () => resolve(buf))
+          req.on('error', reject)
+        })
+
+      // 空值 = 恢复默认（把这一项从文件里删掉，回落到代码里的常量）
+      function coerce(raw, kind, lo, hi) {
+        if (raw === '' || raw === null || raw === undefined) return undefined
+        if (kind === 'bool') {
+          if (typeof raw === 'boolean') return raw
+          const s = String(raw).trim().toLowerCase()
+          return ['1', 'true', 'yes', 'on', '开', '是'].includes(s)
+        }
+        if (kind === 'strlist') {
+          const arr = Array.isArray(raw) ? raw : String(raw).split(/[,，、\n]/)
+          return arr.map((x) => String(x).trim()).filter(Boolean)
+        }
+        const n = Number(raw)
+        if (!Number.isFinite(n)) throw new Error('不是数字：' + raw)
+        let v = kind === 'int' ? Math.round(n) : n
+        if (lo !== null && v < lo) v = lo
+        if (hi !== null && v > hi) v = hi
+        return v
+      }
+
+      reg('/dsh-companion/params', async () => {
+        try {
+          const cache = {}
+          const items = PARAM_SPECS.map((s) => {
+            const [key, g, n, rel, parts, kind, , , def] = s
+            if (!(rel in cache)) cache[rel] = readJson(rel)
+            const cur = getPath(cache[rel], parts)
+            return {
+              key, g, n, kind, def, file: rel,
+              value: cur === undefined ? null : cur,
+              set: cur !== undefined,
+            }
+          })
+          return { ok: true, items }
+        } catch (e) {
+          return { ok: false, error: String((e && e.message) || e) }
+        }
+      })
+
+      reg('/dsh-companion/params/save', async (req) => {
+        try {
+          const payload = JSON.parse((await readBody(req)) || '{}')
+          const key = String(payload.key || '').trim()
+          const spec = SPECS.get(key)
+          if (!spec) return { ok: false, error: '不认识的参数：' + key }
+
+          const [, , , rel, parts, kind, lo, hi] = spec
+          const value = coerce(payload.value, kind, lo, hi)
+
+          const target = paramPath(rel)
+          const data = readJson(rel)
+          if (value === undefined) delPath(data, parts)
+          else setPath(data, parts, value)
+
+          fs.mkdirSync(path.dirname(target), { recursive: true })
+          if (fs.existsSync(target)) {
+            const bak = target + '.bak-' + new Date().toISOString().replace(/[:.]/g, '-')
+            try { fs.copyFileSync(target, bak) } catch {}
+          }
+          const tmp = target + '.tmp'
+          fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', 'utf8')
+          fs.renameSync(tmp, target)
+          pruneBackups(target)
+
+          const now = getPath(data, parts)
+          return { ok: true, key, file: rel, value: now === undefined ? null : now }
+        } catch (e) {
+          return { ok: false, error: String((e && e.message) || e) }
+        }
+      })
+
+      // 保底：表里没列出来的键，仍然可以手写进 settings.json
+      reg('/dsh-companion/settings/save', async (req) => {
+        try {
+          const payload = JSON.parse((await readBody(req)) || '{}')
+          const key = String(payload.key || '').trim()
+          const rawValue = payload.value
+
+          if (!/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,3}$/.test(key)) {
+            return { ok: false, error: '键名不合法: ' + key }
+          }
+          const parts = key.split('.')
+          if (parts.some((p) => p === '__proto__' || p === 'constructor' || p === 'prototype')) {
+            return { ok: false, error: '键名不合法' }
+          }
+
+          const target = paramPath('settings.json')
+          const data = readJson('settings.json')
+          if (rawValue === '' || rawValue === null) delPath(data, parts)
+          else setPath(data, parts, rawValue)
+
+          if (fs.existsSync(target)) {
+            const bak = target + '.bak-' + new Date().toISOString().replace(/[:.]/g, '-')
+            try { fs.copyFileSync(target, bak) } catch {}
+          }
+          const tmp = target + '.tmp'
+          fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', 'utf8')
+          fs.renameSync(tmp, target)
+          pruneBackups(target)
+
+          return { ok: true, key, value: getPath(data, parts) }
+        } catch (e) {
+          return { ok: false, error: String((e && e.message) || e) }
+        }
+      })
+
+      // 只认白名单里的几个文件，路径写死，不接受前端传路径。
+      const DOCS = {
+        soul: { file: 'SOUL.md', title: '人格（她是谁）' },
+        memory: { file: 'MEMORY.md', title: '记忆协议' },
+      }
+
+      const docPath = (name) => {
+        const d = DOCS[name]
+        if (!d) throw new Error('没有这份文档: ' + name)
+        return path.join(home(), d.file)
+      }
+
+      reg('/dsh-companion/doc', async (req) => {
+        try {
+          const q = new URL(String((req && req.url) || ''), 'http://localhost').searchParams
+          const name = q.get('name') || 'soul'
+          const p = docPath(name)
+          const text = fs.readFileSync(p, 'utf8')
+          return { ok: true, data: { name, title: DOCS[name].title, text, chars: text.length } }
+        } catch (e) {
+          return { ok: false, error: String(e && e.message) }
+        }
+      })
+
+      reg('/dsh-companion/doc/save', async (req) => {
+        try {
+          const body = await new Promise((resolve, reject) => {
+            let buf = ''
+            req.on('data', (c) => { buf += c })
+            req.on('end', () => resolve(buf))
+            req.on('error', reject)
+          })
+          const payload = JSON.parse(body || '{}')
+          const name = String(payload.name || 'soul')
+          const text = String(payload.text || '')
+
+          if (text.length > 200000) return { ok: false, error: '超过 200KB，拒绝写入' }
+
+          const p = docPath(name)
+          const bak = p + '.bak-' + new Date().toISOString().replace(/[:.]/g, '-')
+          try { fs.copyFileSync(p, bak) } catch {}
+
+          const tmp = p + '.tmp'
+          fs.writeFileSync(tmp, text, 'utf8')
+          fs.renameSync(tmp, p)
+
+          return { ok: true, data: { name, chars: text.length } }
+        } catch (e) {
+          return { ok: false, error: String(e && e.message) }
+        }
+      })
+
+      // ── 作息读写：设置页用 ────────────────────────────────
+      // rhythm.json 是 companion 的作息配置（会话时段、睡觉时间、打招呼开关）。
+      // 写之前先备份，保留最近 5 份——这些是她的行为参数，改错了会直接影响作息。
+      const rhythmPath = () => path.join(home(), 'rhythm.json')
+
+      const _rhythm = {
+        id: 'rhythm',
+        title: '作息与时段',
+        path: rhythmPath(),
+        desc: '活跃时段决定她什么时候会主动说话，睡觉时间之外不打扰你。',
+      }
+
+      reg('/dsh-companion/rhythm', async () => {
+        try {
+          const raw = fs.readFileSync(rhythmPath(), 'utf8')
+          return { ok: true, data: JSON.parse(raw), path: _rhythm.path }
+        } catch (e) {
+          return { ok: false, error: String(e && e.message) }
+        }
+      })
+
+      reg('/dsh-companion/rhythm/save', async (req) => {
+        try {
+          const body = await new Promise((resolve, reject) => {
+            let buf = ''
+            req.on('data', (c) => { buf += c })
+            req.on('end', () => resolve(buf))
+            req.on('error', reject)
+          })
+          const patch = JSON.parse(body || '{}')
+          if (!patch || typeof patch !== 'object') return { ok: false, error: 'body 不是对象' }
+
+          const p = rhythmPath()
+          const cur = JSON.parse(fs.readFileSync(p, 'utf8'))
+
+          // 只允许改白名单字段，别的键一律忽略（防止前端误传把文件写坏）
+          const allow = ['enabled', 'timezone', 'sleep', 'windows', 'greeting']
+          for (const k of allow) {
+            if (Object.prototype.hasOwnProperty.call(patch, k)) cur[k] = patch[k]
+          }
+
+          const bak = p + '.bak-' + new Date().toISOString().replace(/[:.]/g, '-')
+          try { fs.copyFileSync(p, bak) } catch {}
+
+          const tmp = p + '.tmp'
+          fs.writeFileSync(tmp, JSON.stringify(cur, null, 2) + '\n', 'utf8')
+          fs.renameSync(tmp, p)
+
+          return { ok: true, data: cur }
+        } catch (e) {
+          return { ok: false, error: String(e && e.message) }
+        }
+      })
       reg('/dsh-companion/life', (req) => runJson(['life', '--limit', limitOf(req, 10)]))
       reg('/dsh-companion/turns', (req) => runJson(['turns', '--limit', limitOf(req, 10)]))
 
